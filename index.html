@@ -30,7 +30,7 @@ h1 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 0; letter-s
 .sub.warn { color: var(--neg); }
 h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 32px 0 10px; }
 .actions { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 20px; }
-@media (max-width: 520px) { .actions { grid-template-columns: repeat(3, 1fr); } .actions .pill:nth-child(n+4) { grid-column: span 1; } }
+@media (max-width: 520px) { .actions { grid-template-columns: repeat(3, 1fr); } .actions .pill { padding: 10px 6px; white-space: nowrap; } }
 .pill { appearance: none; border: 1px solid var(--line); background: var(--card); color: var(--ink);
   border-radius: 999px; padding: 10px 14px; font: inherit; font-size: 15px; font-weight: 500; cursor: pointer; }
 .pill.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -43,6 +43,13 @@ h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: upp
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .bucket .bal { font-size: 26px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .bucket .pct { color: var(--muted); font-size: 13px; }
+.bucket .btc { color: #f7931a; font-size: 13px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.sub.btc { color: #f7931a; }
+.preview .r.head { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+.preview .r span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.two { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 8px; }
+.two input { min-width: 0; }
+.warnbox { color: var(--neg); font-size: 13px; margin-top: 10px; }
 .bar { height: 6px; border-radius: 3px; overflow: hidden; display: flex; background: var(--line); margin-top: 14px; }
 .bar span { height: 100%; }
 @media (max-width: 520px) {
@@ -100,12 +107,13 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
   <h1>Strike cash</h1>
   <div class="total" id="total">$0.00</div>
   <div class="sub" id="recon">Not reconciled yet</div>
+  <div class="sub btc" id="btcsum"></div>
 
   <div class="actions">
     <button class="pill primary" data-act="deposit">Deposit</button>
     <button class="pill" data-act="withdraw">Withdraw</button>
     <button class="pill" data-act="move">Move</button>
-    <button class="pill" data-act="interest">Interest</button>
+    <button class="pill" data-act="interest">BTC interest</button>
     <button class="pill" data-act="reconcile">Reconcile</button>
   </div>
 
@@ -169,9 +177,11 @@ function parseMoney(str) {
 }
 const fmt = c => (c < 0 ? "-" : "") + "$" + (Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function balances() {
+/* Cash balances. With `asOf` (YYYY-MM-DD), only entries dated on or before that day count. */
+function balances(asOf) {
   const b = {}; state.buckets.forEach(x => b[x.id] = 0);
   for (const t of state.txns) {
+    if (asOf && t.date > asOf) continue;
     if (t.type === "deposit") b[t.bucket] = (b[t.bucket] || 0) + t.amount;
     else if (t.type === "withdraw") b[t.bucket] = (b[t.bucket] || 0) - t.amount;
     else if (t.type === "move") { b[t.from] = (b[t.from] || 0) - t.amount; b[t.to] = (b[t.to] || 0) + t.amount; }
@@ -183,17 +193,52 @@ const totalOf = b => Object.values(b).reduce((a, c) => a + c, 0);
 const bucketName = id => (state.buckets.find(x => x.id === id) || { name: "(deleted bucket)" }).name;
 const activeBuckets = () => state.buckets.filter(x => !x.archived);
 
-/* Split `amount` cents across buckets in proportion to their positive balances.
+/* Split `amount` (cents or sats) across buckets in proportion to `weights`.
    Largest-remainder rounding so the pieces always add up to the exact amount. */
-function splitProRata(amount, bal) {
-  const ids = state.buckets.map(x => x.id).filter(id => bal[id] > 0);
-  const base = ids.reduce((a, id) => a + bal[id], 0);
+function splitProRata(amount, weights) {
+  const ids = state.buckets.map(x => x.id).filter(id => weights[id] > 0);
+  const base = ids.reduce((a, id) => a + weights[id], 0);
   if (!base) return null;
-  const parts = ids.map(id => { const exact = amount * bal[id] / base; return { id, c: Math.floor(exact), r: exact - Math.floor(exact) }; });
+  const parts = ids.map(id => { const exact = amount * weights[id] / base; return { id, c: Math.floor(exact), r: exact - Math.floor(exact) }; });
   let left = amount - parts.reduce((a, p) => a + p.c, 0);
   parts.slice().sort((a, b) => b.r - a.r).forEach(p => { if (left > 0) { p.c++; left--; } });
   const out = {}; parts.forEach(p => { if (p.c) out[p.id] = p.c; });
   return out;
+}
+
+/* ---------- bitcoin interest ---------- */
+/* "12345" = sats; "0.00012345" = BTC. Exact string math, no float drift. */
+function parseSats(str) {
+  const s = String(str || "").replace(/[,\s]/g, "").replace(/sats?$/i, "");
+  if (/^\d+$/.test(s)) return parseInt(s, 10) || null;
+  const m = s.match(/^(\d*)\.(\d{0,8})$/);
+  if (!m || (m[1] === "" && m[2] === "")) return null;
+  return (parseInt(m[1] || "0", 10) * 1e8 + parseInt((m[2] + "00000000").slice(0, 8), 10)) || null;
+}
+const fmtSats = n => n.toLocaleString("en-US") + " sats";
+const fmtBtc = n => (n / 1e8).toFixed(8) + " BTC";
+const DAY = 86400000;
+const iso = ms => new Date(ms).toISOString().slice(0, 10);
+const utc = d => Date.parse(d + "T00:00:00Z");
+const shortDate = d => new Date(utc(d)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+function prevMonth(d) { // [first, last] day of the calendar month before d
+  const t = new Date(utc(d)), first = Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - 1, 1), last = Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 0);
+  return [iso(first), iso(last)];
+}
+/* Average end-of-day cash balance per bucket over [start, end], inclusive. */
+function avgDaily(start, end) {
+  const sum = {}; let days = 0;
+  for (let ms = utc(start); ms <= utc(end); ms += DAY) {
+    const b = balances(iso(ms)); days++;
+    for (const id in b) sum[id] = (sum[id] || 0) + Math.max(0, b[id]);
+  }
+  const avg = {}; for (const id in sum) avg[id] = days ? sum[id] / days : 0;
+  return { avg, days };
+}
+function btcEarned() {
+  const e = {};
+  for (const t of state.txns) if (t.type === "btcInterest") for (const id in t.splits) e[id] = (e[id] || 0) + t.splits[id];
+  return e;
 }
 
 /* ---------- render ---------- */
@@ -210,6 +255,9 @@ function render() {
   else if (r.actual === total) rec.textContent = "Matches Strike as of " + r.date;
   else { rec.classList.add("warn"); rec.textContent = "Off from Strike by " + fmt(total - r.actual) + " (Strike said " + fmt(r.actual) + " on " + r.date + ")"; }
 
+  const earned = btcEarned(), earnedTotal = Object.values(earned).reduce((a, c) => a + c, 0);
+  $("btcsum").textContent = earnedTotal ? "₿ " + fmtSats(earnedTotal) + " of interest earned" : "";
+
   const list = activeBuckets();
   const box = $("buckets");
   if (!list.length) {
@@ -218,7 +266,8 @@ function render() {
     const n = list.length, cols = Math.ceil(n / Math.ceil(n / 4)); // balanced rows: 5→3+2, 7→4+3, never a lone orphan
     box.innerHTML = '<div class="buckets" style="grid-template-columns:repeat(' + cols + ',1fr)">' + list.map(b => {
       const v = bal[b.id] || 0, pct = total > 0 ? Math.round(v / total * 1000) / 10 : 0;
-      return '<div class="bucket"><div><div class="name"><span class="dot" style="background:' + b.color + '"></span>' + esc(b.name) + '</div></div>' +
+      return '<div class="bucket"><div><div class="name"><span class="dot" style="background:' + b.color + '"></span>' + esc(b.name) + '</div>' +
+        (earned[b.id] ? '<div class="btc">₿ ' + fmtSats(earned[b.id]) + '</div>' : "") + '</div>' +
         '<div><div class="bal">' + fmt(v) + '</div><div class="pct">' + pct + '% of total</div></div></div>';
     }).join("") + '</div>' +
     (total > 0 ? '<div class="bar">' + list.map(b => '<span style="background:' + b.color + ';width:' + Math.max(0, (bal[b.id] || 0) / total * 100) + '%"></span>').join("") + '</div>' : "");
@@ -238,7 +287,9 @@ function rowHtml(t) {
   if (t.type === "deposit") { what = "Deposit → " + esc(bucketName(t.bucket)); amt = "+" + fmt(t.amount); cls = "pos"; }
   else if (t.type === "withdraw") { what = "Withdraw ← " + esc(bucketName(t.bucket)); amt = "−" + fmt(t.amount); cls = "neg"; }
   else if (t.type === "move") { what = esc(bucketName(t.from)) + " → " + esc(bucketName(t.to)); amt = fmt(t.amount); }
-  else { what = "Interest"; amt = "+" + fmt(t.amount); cls = "pos";
+  else if (t.type === "btcInterest") { what = "BTC interest · " + shortDate(t.start) + " – " + shortDate(t.end); amt = "+" + fmtSats(t.sats); cls = "pos";
+    meta = "Received " + t.date + " · " + Object.keys(t.splits).map(id => esc(bucketName(id)) + " " + t.pct[id].toFixed(2) + "% (" + t.splits[id].toLocaleString("en-US") + ")").join(", "); }
+  else { what = "Interest (cash)"; amt = "+" + fmt(t.amount); cls = "pos";
     meta += " · " + Object.keys(t.splits).map(id => esc(bucketName(id)) + " " + fmt(t.splits[id])).join(", "); }
   if (t.note) meta += " · " + esc(t.note);
   return '<div class="row"><div class="main"><div class="what">' + what + '</div><div class="meta">' + meta + '</div></div>' +
@@ -305,24 +356,51 @@ function sheetMove() {
   });
 }
 
-function splitPreview(amount) {
-  const s = amount ? splitProRata(amount, balances()) : null;
-  if (!s) return "";
-  return '<div class="preview">' + Object.keys(s).map(id => '<div class="r"><span>' + esc(bucketName(id)) + '</span><span>+' + fmt(s[id]) + '</span></div>').join("") + '</div>';
+/* Strike pays interest monthly, in bitcoin, on the cash balance. Each bucket's share is its
+   average daily balance over the interest period, so money that sat there all month earns
+   more than money that arrived on the 28th. */
+function btcSplit(sats, usd, start, end) {
+  const { avg, days } = avgDaily(start, end);
+  const base = Object.values(avg).reduce((a, c) => a + c, 0);
+  if (!base) return null;
+  const pct = {}; for (const id in avg) if (avg[id] > 0) pct[id] = Math.round(avg[id] / base * 1e6) / 1e4;
+  return { avg, days, pct, splits: sats ? splitProRata(sats, avg) : null, usdSplits: usd ? splitProRata(usd, avg) : null };
 }
 
-function sheetInterest(prefill) {
-  const total = totalOf(balances());
-  if (total <= 0) return showError("No balance to split interest across", "Interest is shared by each bucket's share of the balance. Do this: log your deposits first, then add the interest payment.");
-  open('<h3>Interest payment</h3><p class="hint">Split across buckets by each one\'s share of the current balance.</p>' +
-    '<label>Interest amount</label><input id="f-amt" inputmode="decimal" placeholder="0.00" value="' + (prefill ? (prefill / 100).toFixed(2) : "") + '">' +
-    '<div id="f-prev">' + splitPreview(prefill) + '</div>' + dateField + noteField + btns("Add interest"), () => {
-    $("f-amt").oninput = () => { $("f-prev").innerHTML = splitPreview(parseMoney(val("f-amt"))); };
+function sheetBtcInterest() {
+  const [ps, pe] = prevMonth(today());
+  open('<h3>BTC interest</h3><p class="hint">Strike pays monthly in bitcoin. Each bucket gets its share of the average daily cash balance over the interest period.</p>' +
+    '<label>Amount received (sats, or BTC with a decimal)</label><input id="f-sats" inputmode="decimal" placeholder="12345  or  0.00012345">' +
+    '<div class="sub" id="f-conv" style="margin-top:4px"></div>' +
+    '<label>Dollar value when received (optional, for taxes)</label><input id="f-usd" inputmode="decimal" placeholder="0.00">' +
+    '<div class="two"><div><label>Interest period from</label><input type="date" id="f-start" value="' + ps + '"></div>' +
+    '<div><label>to</label><input type="date" id="f-end" value="' + pe + '"></div></div>' +
+    '<div id="f-prev"></div>' +
+    '<label>Date received</label><input type="date" id="f-date" value="' + today() + '">' + noteField + btns("Add BTC interest"), () => {
+    const upd = () => {
+      const sats = parseSats(val("f-sats")), usd = parseMoney(val("f-usd")), st = val("f-start"), en = val("f-end");
+      $("f-conv").textContent = sats ? (val("f-sats").includes(".") ? "= " + fmtSats(sats) : "= " + fmtBtc(sats)) : "";
+      if (!st || !en || st > en) { $("f-prev").innerHTML = '<div class="warnbox">Pick a period where "from" is on or before "to".</div>'; return; }
+      const r = btcSplit(sats, usd, st, en);
+      if (!r) { $("f-prev").innerHTML = '<div class="warnbox">No bucket held cash between ' + shortDate(st) + ' and ' + shortDate(en) + '. Check the dates on your deposits.</div>'; return; }
+      const first = state.txns.filter(t => t.type === "deposit").map(t => t.date).sort()[0];
+      $("f-prev").innerHTML = '<div class="preview"><div class="r head"><span>' + r.days + ' days · avg balance</span><span>Share' + (sats ? ' · sats' : '') + (usd ? ' · $' : '') + '</span></div>' +
+        activeBuckets().concat(state.buckets.filter(b => b.archived && r.pct[b.id])).filter(b => r.pct[b.id]).map(b =>
+          '<div class="r"><span><span class="dot" style="display:inline-block;margin-right:6px;background:' + b.color + '"></span>' + esc(b.name) + ' · ' + fmt(Math.round(r.avg[b.id])) + '</span><span><b>' + r.pct[b.id].toFixed(2) + '%</b>' +
+          (sats ? ' · ' + (r.splits[b.id] || 0).toLocaleString("en-US") : '') + (usd ? ' · ' + fmt(r.usdSplits[b.id] || 0) : '') + '</span></div>').join("") + '</div>' +
+        (first && first > st ? '<div class="warnbox">Your first deposit is dated ' + shortDate(first) + ', after this period starts, so earlier days count as $0. If the money was in Strike before that, delete that deposit and re-add it with the real date.</div>' : "");
+    };
+    ["f-sats", "f-usd", "f-start", "f-end"].forEach(id => $(id).oninput = upd); upd();
     $("f-go").onclick = () => {
-      const a = parseMoney(val("f-amt"));
-      if (!a) return showError("Amount isn't valid", "Nothing was saved. Do this: enter the interest Strike paid, like 12.34.");
-      const splits = splitProRata(a, balances());
-      addTxn({ type: "interest", amount: a, splits }); toast("Split " + fmt(a) + " of interest");
+      const sats = parseSats(val("f-sats")), usdRaw = val("f-usd").trim(), usd = usdRaw ? parseMoney(usdRaw) : null, st = val("f-start"), en = val("f-end");
+      if (!sats) return showError("Amount isn't valid", "Nothing was saved. Do this: enter the bitcoin Strike paid, as sats (12345) or BTC with a decimal (0.00012345).");
+      if (usdRaw && !usd) return showError("Dollar value isn't valid", "Nothing was saved. Do this: enter it like 8.42, or leave it blank.");
+      if (!st || !en || st > en) return showError("Interest period isn't valid", "Nothing was saved. Do this: set \"from\" on or before \"to\" — usually the first and last day of last month.");
+      const r = btcSplit(sats, usd, st, en);
+      if (!r) return showError("No bucket held cash in that period", "Nothing was saved. Do this: check the period dates, or delete and re-add your starting deposits with the date the money actually arrived.");
+      const t = { type: "btcInterest", sats, start: st, end: en, pct: r.pct, splits: r.splits };
+      if (usd) { t.usd = usd; t.usdSplits = r.usdSplits; }
+      addTxn(t); toast("Split " + fmtSats(sats) + " across " + Object.keys(r.splits).length + " buckets");
     };
   });
 }
@@ -339,9 +417,7 @@ function sheetReconcile() {
       const d = a - total, res = $("f-res");
       if (d === 0) { res.innerHTML = '<div class="preview"><div class="r"><span>All accounted for. Every dollar has an owner.</span></div></div>'; $("f-go").textContent = "Done"; $("f-go").onclick = close; }
       else if (d > 0) {
-        res.innerHTML = '<div class="preview"><div class="r"><span>Strike has <b>' + fmt(d) + '</b> more than tracked.</span></div><div class="r"><span>Usually new interest. If it was a deposit, log it with Deposit instead.</span></div></div>' +
-          '<div class="btns"><button class="pill primary" id="f-asint">Split ' + fmt(d) + ' as interest</button></div>';
-        $("f-asint").onclick = () => sheetInterest(d);
+        res.innerHTML = '<div class="preview"><div class="r"><span>Strike has <b>' + fmt(d) + '</b> more than tracked.</span></div><div class="r"><span>Probably a deposit that isn\'t logged yet. Log it with Deposit into the right bucket. (BTC interest doesn\'t land in cash, so it never shows up here.)</span></div></div>';
       } else {
         res.innerHTML = '<div class="preview"><div class="r"><span>Strike has <b>' + fmt(-d) + '</b> less than tracked.</span></div><div class="r"><span>Probably a withdrawal or BTC buy that isn\'t logged. Log it with Withdraw from the right bucket.</span></div></div>';
       }
@@ -422,7 +498,7 @@ document.addEventListener("click", e => {
     return;
   }
   const b = e.target.closest("[data-act]"); if (!b || b.disabled) return;
-  ({ deposit: sheetDeposit, withdraw: sheetWithdraw, move: sheetMove, interest: () => sheetInterest(), reconcile: sheetReconcile,
+  ({ deposit: sheetDeposit, withdraw: sheetWithdraw, move: sheetMove, interest: sheetBtcInterest, reconcile: sheetReconcile,
      manage: sheetManage, export: exportJson, import: () => $("file").click(), close,
      toggleAll: () => { showAll = !showAll; render(); } })[b.dataset.act]();
 });
