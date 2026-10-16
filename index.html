@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Buckets">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+<title>Strike Buckets</title>
+<style>
+:root {
+  --bg: #f5f5f7; --card: #ffffff; --ink: #1d1d1f; --muted: #6e6e73; --line: rgba(0,0,0,.09);
+  --accent: #0a84ff; --pos: #1f9d55; --neg: #d70015; --field: #ffffff; --shade: rgba(0,0,0,.35);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #000; --card: #111113; --ink: #f5f5f7; --muted: #8e8e93; --line: rgba(255,255,255,.12);
+    --accent: #0a84ff; --pos: #30d158; --neg: #ff453a; --field: #1c1c1e; --shade: rgba(0,0,0,.6); }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased; }
+main { max-width: 860px; margin: 0 auto; padding: calc(env(safe-area-inset-top) + 24px) 16px calc(env(safe-area-inset-bottom) + 40px); }
+h1 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 0; letter-spacing: .02em; text-transform: uppercase; }
+.total { font-size: 44px; font-weight: 700; letter-spacing: -.02em; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+.sub { color: var(--muted); font-size: 14px; }
+.sub.warn { color: var(--neg); }
+h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 32px 0 10px; }
+.actions { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 20px; }
+@media (max-width: 520px) { .actions { grid-template-columns: repeat(3, 1fr); } .actions .pill:nth-child(n+4) { grid-column: span 1; } }
+.pill { appearance: none; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  border-radius: 999px; padding: 10px 14px; font: inherit; font-size: 15px; font-weight: 500; cursor: pointer; }
+.pill.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pill.danger { color: var(--neg); }
+.pill:disabled { opacity: .4; cursor: default; }
+.pill:active:not(:disabled) { transform: scale(.98); }
+.buckets { display: grid; gap: 10px; }
+.bucket { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; position: relative; overflow: hidden; }
+.bucket .name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.bucket .bal { font-size: 26px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.bucket .pct { color: var(--muted); font-size: 13px; }
+.bar { height: 6px; border-radius: 3px; overflow: hidden; display: flex; background: var(--line); margin-top: 14px; }
+.bar span { height: 100%; }
+@media (max-width: 520px) {
+  .buckets { grid-template-columns: 1fr !important; gap: 0; background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .bucket { border: 0; border-radius: 0; display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; }
+  .bucket + .bucket { border-top: 1px solid var(--line); }
+  .bucket .bal { margin: 0; font-size: 18px; text-align: right; }
+  .bucket .pct { text-align: right; }
+}
+.empty { background: var(--card); border: 1px dashed var(--line); border-radius: 16px; padding: 28px 16px; text-align: center; color: var(--muted); }
+.list { background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+.row { display: flex; gap: 12px; align-items: center; padding: 12px 16px; }
+.row + .row { border-top: 1px solid var(--line); }
+.row .main { flex: 1; min-width: 0; }
+.row .what { font-weight: 500; }
+.row .meta { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+.row .amt { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.amt.pos { color: var(--pos); } .amt.neg { color: var(--neg); }
+.x { appearance: none; border: 0; background: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 4px 6px; border-radius: 8px; }
+.x:hover { color: var(--neg); }
+.more { text-align: center; padding: 10px; }
+.foot { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 32px; justify-content: center; }
+.foot .pill { font-size: 14px; padding: 8px 14px; }
+.note { color: var(--muted); font-size: 12px; text-align: center; margin-top: 16px; }
+/* sheet */
+.shade { position: fixed; inset: 0; background: var(--shade); display: none; align-items: flex-end; justify-content: center; z-index: 10; }
+.shade.open { display: flex; }
+@media (min-width: 600px) { .shade { align-items: center; } }
+.sheet { background: var(--bg); width: 100%; max-width: 460px; border-radius: 20px 20px 0 0; padding: 20px 16px calc(env(safe-area-inset-bottom) + 20px); max-height: 92vh; overflow: auto; }
+@media (min-width: 600px) { .sheet { border-radius: 20px; } }
+.sheet h3 { margin: 0 0 4px; font-size: 20px; }
+.sheet .hint { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+input, select { width: 100%; font: inherit; font-size: 17px; color: var(--ink); background: var(--field); border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px; }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.btns { display: flex; gap: 8px; margin-top: 20px; }
+.btns .pill { flex: 1; }
+.preview { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px; margin-top: 14px; font-size: 14px; }
+.preview .r { display: flex; justify-content: space-between; padding: 6px 0; }
+.preview .r + .r { border-top: 1px solid var(--line); }
+.manage-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.manage-row input { flex: 1; }
+.manage-row .pill { padding: 9px 12px; font-size: 14px; }
+/* toast */
+.toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 20px); transform: translateX(-50%); max-width: min(520px, calc(100% - 32px));
+  background: var(--ink); color: var(--bg); border-radius: 14px; padding: 12px 16px; font-size: 14px; z-index: 20; display: none; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+.toast.err { background: var(--neg); color: #fff; }
+.toast.show { display: block; }
+.toast b { display: block; margin-bottom: 2px; }
+.toast .close { float: right; margin-left: 12px; cursor: pointer; opacity: .8; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Strike cash</h1>
+  <div class="total" id="total">$0.00</div>
+  <div class="sub" id="recon">Not reconciled yet</div>
+
+  <div class="actions">
+    <button class="pill primary" data-act="deposit">Deposit</button>
+    <button class="pill" data-act="withdraw">Withdraw</button>
+    <button class="pill" data-act="move">Move</button>
+    <button class="pill" data-act="interest">Interest</button>
+    <button class="pill" data-act="reconcile">Reconcile</button>
+  </div>
+
+  <h2>Buckets</h2>
+  <div id="buckets"></div>
+
+  <h2>Activity</h2>
+  <div id="activity"></div>
+
+  <div class="foot">
+    <button class="pill" data-act="manage">Buckets…</button>
+    <button class="pill" data-act="export">Back up</button>
+    <button class="pill" data-act="import">Restore</button>
+  </div>
+  <p class="note">Stored only in this browser on this device. Back up after changes you care about.</p>
+  <input type="file" id="file" accept="application/json,.json" hidden>
+</main>
+
+<div class="shade" id="shade"><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+"use strict";
+const KEY = "strike-buckets-v1";
+const COLORS = ["#0a84ff", "#30d158", "#ff9f0a", "#bf5af2", "#ff375f", "#64d2ff", "#ffd60a", "#ac8e68"];
+
+/* ---------- state ---------- */
+let state = { buckets: [], txns: [], lastRecon: null };
+let showAll = false;
+let storageOk = true;
+
+function load() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) state = normalize(JSON.parse(raw));
+  } catch (e) {
+    storageOk = false;
+    showError("Couldn't read saved data",
+      "This browser blocked storage (often Private Browsing). Nothing you enter will be kept. Do this: open the app in a normal Safari/Chrome window, then use Restore if you have a backup file.");
+  }
+}
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); }
+  catch (e) {
+    showError("Couldn't save",
+      "Your last change is on screen but not stored. Do this now: tap Back up to download a copy, then reload and use Restore with that file.");
+  }
+}
+function normalize(s) {
+  if (!s || !Array.isArray(s.buckets) || !Array.isArray(s.txns)) throw new Error("Not a Strike Buckets file");
+  return { buckets: s.buckets, txns: s.txns, lastRecon: s.lastRecon || null };
+}
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+
+/* ---------- money (integer cents) ---------- */
+function parseMoney(str) {
+  const s = String(str || "").replace(/[$,\s]/g, "");
+  if (!/^\d*(\.\d{0,2})?$/.test(s) || s === "" || s === ".") return null;
+  return Math.round(parseFloat(s) * 100);
+}
+const fmt = c => (c < 0 ? "-" : "") + "$" + (Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function balances() {
+  const b = {}; state.buckets.forEach(x => b[x.id] = 0);
+  for (const t of state.txns) {
+    if (t.type === "deposit") b[t.bucket] = (b[t.bucket] || 0) + t.amount;
+    else if (t.type === "withdraw") b[t.bucket] = (b[t.bucket] || 0) - t.amount;
+    else if (t.type === "move") { b[t.from] = (b[t.from] || 0) - t.amount; b[t.to] = (b[t.to] || 0) + t.amount; }
+    else if (t.type === "interest") for (const id in t.splits) b[id] = (b[id] || 0) + t.splits[id];
+  }
+  return b;
+}
+const totalOf = b => Object.values(b).reduce((a, c) => a + c, 0);
+const bucketName = id => (state.buckets.find(x => x.id === id) || { name: "(deleted bucket)" }).name;
+const activeBuckets = () => state.buckets.filter(x => !x.archived);
+
+/* Split `amount` cents across buckets in proportion to their positive balances.
+   Largest-remainder rounding so the pieces always add up to the exact amount. */
+function splitProRata(amount, bal) {
+  const ids = state.buckets.map(x => x.id).filter(id => bal[id] > 0);
+  const base = ids.reduce((a, id) => a + bal[id], 0);
+  if (!base) return null;
+  const parts = ids.map(id => { const exact = amount * bal[id] / base; return { id, c: Math.floor(exact), r: exact - Math.floor(exact) }; });
+  let left = amount - parts.reduce((a, p) => a + p.c, 0);
+  parts.slice().sort((a, b) => b.r - a.r).forEach(p => { if (left > 0) { p.c++; left--; } });
+  const out = {}; parts.forEach(p => { if (p.c) out[p.id] = p.c; });
+  return out;
+}
+
+/* ---------- render ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function render() {
+  const bal = balances(), total = totalOf(bal);
+  $("total").textContent = fmt(total);
+
+  const r = state.lastRecon, rec = $("recon");
+  rec.classList.remove("warn");
+  if (!r) rec.textContent = "Not reconciled yet — tap Reconcile with your Strike balance";
+  else if (r.actual === total) rec.textContent = "Matches Strike as of " + r.date;
+  else { rec.classList.add("warn"); rec.textContent = "Off from Strike by " + fmt(total - r.actual) + " (Strike said " + fmt(r.actual) + " on " + r.date + ")"; }
+
+  const list = activeBuckets();
+  const box = $("buckets");
+  if (!list.length) {
+    box.innerHTML = '<div class="empty">No buckets yet.<br><br><button class="pill primary" data-act="manage">Add your first bucket</button></div>';
+  } else {
+    const n = list.length, cols = Math.ceil(n / Math.ceil(n / 4)); // balanced rows: 5→3+2, 7→4+3, never a lone orphan
+    box.innerHTML = '<div class="buckets" style="grid-template-columns:repeat(' + cols + ',1fr)">' + list.map(b => {
+      const v = bal[b.id] || 0, pct = total > 0 ? Math.round(v / total * 1000) / 10 : 0;
+      return '<div class="bucket"><div><div class="name"><span class="dot" style="background:' + b.color + '"></span>' + esc(b.name) + '</div></div>' +
+        '<div><div class="bal">' + fmt(v) + '</div><div class="pct">' + pct + '% of total</div></div></div>';
+    }).join("") + '</div>' +
+    (total > 0 ? '<div class="bar">' + list.map(b => '<span style="background:' + b.color + ';width:' + Math.max(0, (bal[b.id] || 0) / total * 100) + '%"></span>').join("") + '</div>' : "");
+  }
+
+  const tx = state.txns.slice().sort((a, b) => (b.date + b.created).localeCompare(a.date + a.created));
+  const shown = showAll ? tx : tx.slice(0, 25);
+  $("activity").innerHTML = !tx.length ? '<div class="empty">Nothing logged yet.</div>' :
+    '<div class="list">' + shown.map(rowHtml).join("") +
+    (tx.length > 25 ? '<div class="row more"><button class="pill" data-act="toggleAll">' + (showAll ? "Show recent" : "Show all " + tx.length) + '</button></div>' : "") + '</div>';
+
+  document.querySelectorAll('[data-act="withdraw"],[data-act="move"],[data-act="interest"],[data-act="deposit"]').forEach(b => b.disabled = !list.length);
+}
+
+function rowHtml(t) {
+  let what, meta = t.date, amt, cls = "";
+  if (t.type === "deposit") { what = "Deposit → " + esc(bucketName(t.bucket)); amt = "+" + fmt(t.amount); cls = "pos"; }
+  else if (t.type === "withdraw") { what = "Withdraw ← " + esc(bucketName(t.bucket)); amt = "−" + fmt(t.amount); cls = "neg"; }
+  else if (t.type === "move") { what = esc(bucketName(t.from)) + " → " + esc(bucketName(t.to)); amt = fmt(t.amount); }
+  else { what = "Interest"; amt = "+" + fmt(t.amount); cls = "pos";
+    meta += " · " + Object.keys(t.splits).map(id => esc(bucketName(id)) + " " + fmt(t.splits[id])).join(", "); }
+  if (t.note) meta += " · " + esc(t.note);
+  return '<div class="row"><div class="main"><div class="what">' + what + '</div><div class="meta">' + meta + '</div></div>' +
+    '<div class="amt ' + cls + '">' + amt + '</div><button class="x" title="Delete" data-del="' + t.id + '">×</button></div>';
+}
+
+/* ---------- sheets ---------- */
+function open(html, onReady) {
+  $("sheet").innerHTML = html; $("shade").classList.add("open");
+  const first = $("sheet").querySelector("input,select"); if (first && matchMedia("(pointer:fine)").matches) first.focus();
+  if (onReady) onReady();
+}
+function close() { $("shade").classList.remove("open"); $("sheet").innerHTML = ""; }
+$("shade").addEventListener("click", e => { if (e.target.id === "shade") close(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") close(); });
+
+const bucketOpts = (sel, bal) => activeBuckets().map(b => '<option value="' + b.id + '"' + (b.id === sel ? " selected" : "") + '>' + esc(b.name) + (bal ? " — " + fmt(bal[b.id] || 0) : "") + '</option>').join("");
+const dateField = '<label>Date</label><input type="date" id="f-date" value="' + today() + '">';
+const noteField = '<label>Note (optional)</label><input id="f-note" maxlength="80" placeholder="e.g. paycheck, rent">';
+const btns = label => '<div class="btns"><button class="pill" data-act="close">Cancel</button><button class="pill primary" id="f-go">' + label + '</button></div>';
+const val = id => ($(id) || {}).value || "";
+
+function sheetDeposit() {
+  open('<h3>Deposit</h3><p class="hint">Money added to Strike, and whose it is.</p>' +
+    '<label>Amount</label><input id="f-amt" inputmode="decimal" placeholder="0.00">' +
+    '<label>Into bucket</label><select id="f-b">' + bucketOpts() + '</select>' + dateField + noteField + btns("Add deposit"), () => {
+    $("f-go").onclick = () => {
+      const a = parseMoney(val("f-amt"));
+      if (!a) return showError("Amount isn't valid", "Nothing was saved. Do this: enter a dollar amount like 250 or 250.75, then tap Add deposit again.");
+      addTxn({ type: "deposit", amount: a, bucket: val("f-b") }); toast("Added " + fmt(a) + " to " + bucketName(val("f-b")));
+    };
+  });
+}
+
+function sheetWithdraw() {
+  const bal = balances();
+  open('<h3>Withdraw</h3><p class="hint">Money taken out of Strike, and whose it was.</p>' +
+    '<label>Amount</label><input id="f-amt" inputmode="decimal" placeholder="0.00">' +
+    '<label>From bucket</label><select id="f-b">' + bucketOpts(null, bal) + '</select>' + dateField + noteField + btns("Withdraw"), () => {
+    $("f-go").onclick = () => {
+      const a = parseMoney(val("f-amt")), id = val("f-b");
+      if (!a) return showError("Amount isn't valid", "Nothing was saved. Do this: enter a dollar amount like 250 or 250.75, then tap Withdraw again.");
+      if (a > (bal[id] || 0)) return showError(bucketName(id) + " only has " + fmt(bal[id] || 0),
+        "Nothing was saved. Do this: lower the amount, pick the bucket the money really came from, or Move money into " + bucketName(id) + " first.");
+      addTxn({ type: "withdraw", amount: a, bucket: id }); toast("Took " + fmt(a) + " from " + bucketName(id));
+    };
+  });
+}
+
+function sheetMove() {
+  const bal = balances(), list = activeBuckets();
+  if (list.length < 2) return showError("Need two buckets to move money", "Do this: tap Buckets… at the bottom and add a second bucket, then try Move again.");
+  open('<h3>Move between buckets</h3><p class="hint">Reassign money inside Strike. Your Strike balance doesn\'t change.</p>' +
+    '<label>Amount</label><input id="f-amt" inputmode="decimal" placeholder="0.00">' +
+    '<label>From</label><select id="f-from">' + bucketOpts(list[0].id, bal) + '</select>' +
+    '<label>To</label><select id="f-to">' + bucketOpts(list[1].id, bal) + '</select>' + dateField + noteField + btns("Move"), () => {
+    $("f-go").onclick = () => {
+      const a = parseMoney(val("f-amt")), from = val("f-from"), to = val("f-to");
+      if (!a) return showError("Amount isn't valid", "Nothing was saved. Do this: enter a dollar amount like 250 or 250.75, then tap Move again.");
+      if (from === to) return showError("From and To are the same bucket", "Nothing was saved. Do this: pick two different buckets.");
+      if (a > (bal[from] || 0)) return showError(bucketName(from) + " only has " + fmt(bal[from] || 0), "Nothing was saved. Do this: lower the amount to " + fmt(bal[from] || 0) + " or less.");
+      addTxn({ type: "move", amount: a, from, to }); toast("Moved " + fmt(a) + " to " + bucketName(to));
+    };
+  });
+}
+
+function splitPreview(amount) {
+  const s = amount ? splitProRata(amount, balances()) : null;
+  if (!s) return "";
+  return '<div class="preview">' + Object.keys(s).map(id => '<div class="r"><span>' + esc(bucketName(id)) + '</span><span>+' + fmt(s[id]) + '</span></div>').join("") + '</div>';
+}
+
+function sheetInterest(prefill) {
+  const total = totalOf(balances());
+  if (total <= 0) return showError("No balance to split interest across", "Interest is shared by each bucket's share of the balance. Do this: log your deposits first, then add the interest payment.");
+  open('<h3>Interest payment</h3><p class="hint">Split across buckets by each one\'s share of the current balance.</p>' +
+    '<label>Interest amount</label><input id="f-amt" inputmode="decimal" placeholder="0.00" value="' + (prefill ? (prefill / 100).toFixed(2) : "") + '">' +
+    '<div id="f-prev">' + splitPreview(prefill) + '</div>' + dateField + noteField + btns("Add interest"), () => {
+    $("f-amt").oninput = () => { $("f-prev").innerHTML = splitPreview(parseMoney(val("f-amt"))); };
+    $("f-go").onclick = () => {
+      const a = parseMoney(val("f-amt"));
+      if (!a) return showError("Amount isn't valid", "Nothing was saved. Do this: enter the interest Strike paid, like 12.34.");
+      const splits = splitProRata(a, balances());
+      addTxn({ type: "interest", amount: a, splits }); toast("Split " + fmt(a) + " of interest");
+    };
+  });
+}
+
+function sheetReconcile() {
+  const total = totalOf(balances());
+  open('<h3>Reconcile</h3><p class="hint">Enter the cash balance the Strike app shows right now. Tracked here: <b>' + fmt(total) + '</b></p>' +
+    '<label>Strike cash balance</label><input id="f-amt" inputmode="decimal" placeholder="0.00">' +
+    '<div id="f-res"></div>' + btns("Check"), () => {
+    const check = () => {
+      const a = parseMoney(val("f-amt"));
+      if (a === null) return showError("Amount isn't valid", "Nothing was saved. Do this: type the balance from the Strike app, like 12500.42.");
+      state.lastRecon = { actual: a, date: today() }; save(); render();
+      const d = a - total, res = $("f-res");
+      if (d === 0) { res.innerHTML = '<div class="preview"><div class="r"><span>All accounted for. Every dollar has an owner.</span></div></div>'; $("f-go").textContent = "Done"; $("f-go").onclick = close; }
+      else if (d > 0) {
+        res.innerHTML = '<div class="preview"><div class="r"><span>Strike has <b>' + fmt(d) + '</b> more than tracked.</span></div><div class="r"><span>Usually new interest. If it was a deposit, log it with Deposit instead.</span></div></div>' +
+          '<div class="btns"><button class="pill primary" id="f-asint">Split ' + fmt(d) + ' as interest</button></div>';
+        $("f-asint").onclick = () => sheetInterest(d);
+      } else {
+        res.innerHTML = '<div class="preview"><div class="r"><span>Strike has <b>' + fmt(-d) + '</b> less than tracked.</span></div><div class="r"><span>Probably a withdrawal or BTC buy that isn\'t logged. Log it with Withdraw from the right bucket.</span></div></div>';
+      }
+    };
+    $("f-go").onclick = check;
+  });
+}
+
+function sheetManage() {
+  const bal = balances();
+  const rows = activeBuckets().map(b => '<div class="manage-row"><span class="dot" style="background:' + b.color + '"></span>' +
+    '<input data-ren="' + b.id + '" value="' + esc(b.name) + '" maxlength="40"><button class="pill danger" data-rm="' + b.id + '">Remove</button></div>').join("");
+  open('<h3>Buckets</h3><p class="hint">Who owns what slice of the balance — e.g. My Savings, Partner Savings, Joint Checking.</p>' +
+    (rows || "") + '<label>New bucket</label><div class="manage-row"><input id="f-new" maxlength="40" placeholder="Bucket name"><button class="pill primary" id="f-add">Add</button></div>' +
+    '<div class="btns"><button class="pill" data-act="close">Done</button></div>', () => {
+    const add = () => {
+      const name = val("f-new").trim();
+      if (!name) return showError("Bucket needs a name", "Do this: type a name like \"Partner Savings\", then tap Add.");
+      if (activeBuckets().some(b => b.name.toLowerCase() === name.toLowerCase())) return showError("\"" + name + "\" already exists", "Do this: pick a different name.");
+      state.buckets.push({ id: uid(), name, color: COLORS[state.buckets.length % COLORS.length] });
+      save(); render(); sheetManage(); toast("Added " + name);
+    };
+    $("f-add").onclick = add;
+    $("f-new").onkeydown = e => { if (e.key === "Enter") add(); };
+    $("sheet").querySelectorAll("[data-ren]").forEach(inp => inp.onchange = () => {
+      const name = inp.value.trim(), b = state.buckets.find(x => x.id === inp.dataset.ren);
+      if (!name) { inp.value = b.name; return showError("Bucket needs a name", "The old name was kept. Do this: type a new name instead of clearing it."); }
+      b.name = name; save(); render();
+    });
+    $("sheet").querySelectorAll("[data-rm]").forEach(btn => btn.onclick = () => {
+      const id = btn.dataset.rm, v = bal[id] || 0;
+      if (v !== 0) return showError(bucketName(id) + " still holds " + fmt(v),
+        "Nothing was removed. Do this: Move its money to another bucket (or Withdraw it), then remove it.");
+      const b = state.buckets.find(x => x.id === id);
+      if (state.txns.some(t => t.bucket === id || t.from === id || t.to === id || (t.splits && t.splits[id]))) b.archived = true; // keep history readable
+      else state.buckets = state.buckets.filter(x => x.id !== id);
+      save(); render(); sheetManage(); toast("Removed " + b.name);
+    });
+  });
+}
+
+function addTxn(t) {
+  t.id = uid(); t.created = new Date().toISOString(); t.date = val("f-date") || today();
+  const note = val("f-note").trim(); if (note) t.note = note;
+  state.txns.push(t); save(); close(); render();
+}
+
+/* ---------- backup ---------- */
+function exportJson() {
+  const blob = new Blob([JSON.stringify({ app: "strike-buckets", version: 1, exported: new Date().toISOString(), ...state }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "strike-buckets-" + today() + ".json";
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast("Backup downloaded");
+}
+$("file").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  try {
+    const s = normalize(JSON.parse(await f.text()));
+    if (state.txns.length && !confirm("Replace everything here with the backup from " + f.name + "? Current data will be overwritten.")) return;
+    state = s; save(); render(); toast("Restored " + s.buckets.length + " buckets, " + s.txns.length + " entries");
+  } catch (err) {
+    showError("Couldn't restore that file", "Your current data is untouched. Do this: pick a .json file made by this app's Back up button (named strike-buckets-YYYY-MM-DD.json).");
+  }
+};
+
+/* ---------- wiring ---------- */
+document.addEventListener("click", e => {
+  const del = e.target.closest("[data-del]");
+  if (del) {
+    const t = state.txns.find(x => x.id === del.dataset.del); if (!t) return;
+    if (!confirm("Delete this entry? Balances will be recalculated.")) return;
+    const bal = balances();
+    if (t.type === "deposit" && (bal[t.bucket] || 0) - t.amount < 0)
+      return showError("Can't delete that deposit yet", "Later entries spend that money, so " + bucketName(t.bucket) + " would go negative. Nothing changed. Do this: delete the later withdrawal or move first.");
+    if (t.type === "move" && (bal[t.to] || 0) - t.amount < 0)
+      return showError("Can't delete that move yet", "Later entries spend that money, so " + bucketName(t.to) + " would go negative. Nothing changed. Do this: delete the later entry first.");
+    state.txns = state.txns.filter(x => x.id !== t.id); save(); render(); toast("Entry deleted");
+    return;
+  }
+  const b = e.target.closest("[data-act]"); if (!b || b.disabled) return;
+  ({ deposit: sheetDeposit, withdraw: sheetWithdraw, move: sheetMove, interest: () => sheetInterest(), reconcile: sheetReconcile,
+     manage: sheetManage, export: exportJson, import: () => $("file").click(), close,
+     toggleAll: () => { showAll = !showAll; render(); } })[b.dataset.act]();
+});
+
+/* ---------- toasts ---------- */
+let toastTimer;
+function toast(msg) {
+  const t = $("toast"); clearTimeout(toastTimer);
+  t.className = "toast show"; t.textContent = msg;
+  toastTimer = setTimeout(() => t.className = "toast", 2200);
+}
+function showError(title, fix) {
+  const t = $("toast"); clearTimeout(toastTimer);
+  t.className = "toast err show";
+  t.innerHTML = '<span class="close" aria-label="Dismiss">✕</span><b>' + esc(title) + '</b>' + esc(fix);
+  t.querySelector(".close").onclick = () => t.className = "toast";
+  toastTimer = setTimeout(() => t.className = "toast", 9000);
+}
+window.addEventListener("error", e => showError("Something broke", "Your saved data is safe. Do this: tap Back up to keep a copy, then reload the page. (" + (e.message || "unknown error") + ")"));
+window.addEventListener("unhandledrejection", e => showError("Something broke", "Your saved data is safe. Do this: tap Back up to keep a copy, then reload the page. (" + ((e.reason && e.reason.message) || "unknown error") + ")"));
+
+/* manifest so Add to Home Screen opens full-screen */
+(() => {
+  const m = { name: "Strike Buckets", short_name: "Buckets", display: "standalone", background_color: "#000000", theme_color: "#000000", start_url: location.href.split("#")[0] };
+  const l = document.createElement("link"); l.rel = "manifest";
+  l.href = "data:application/manifest+json," + encodeURIComponent(JSON.stringify(m)); document.head.appendChild(l);
+})();
+
+load(); render();
+</script>
+</body>
+</html>
