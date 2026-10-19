@@ -91,6 +91,18 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .preview .r { display: flex; justify-content: space-between; padding: 6px 0; }
 .preview .r + .r { border-top: 1px solid var(--line); }
 .manage-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.split-row { display: flex; gap: 8px; align-items: center; padding: 8px 0; }
+.split-row + .split-row { border-top: 1px solid var(--line); }
+.split-row .who { flex: 1; min-width: 0; }
+.split-row .who b { display: flex; align-items: center; gap: 6px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-row .who small { color: var(--muted); font-size: 12px; }
+.split-row .who small.flag { color: var(--neg); }
+.split-row input { width: 110px; flex: none; text-align: right; padding: 9px 10px; }
+.split-row.bad input { border-color: var(--neg); outline-color: var(--neg); }
+.split-row .pill { padding: 8px 10px; font-size: 13px; flex: none; }
+.splits { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; margin-top: 4px; }
+.status { margin-top: 12px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.status.ok { color: var(--pos); } .status.bad { color: var(--neg); }
 .manage-row input { flex: 1; }
 .manage-row .pill { padding: 9px 12px; font-size: 14px; }
 /* toast */
@@ -182,14 +194,15 @@ function balances(asOf) {
   const b = {}; state.buckets.forEach(x => b[x.id] = 0);
   for (const t of state.txns) {
     if (asOf && t.date > asOf) continue;
-    if (t.type === "deposit") b[t.bucket] = (b[t.bucket] || 0) + t.amount;
-    else if (t.type === "withdraw") b[t.bucket] = (b[t.bucket] || 0) - t.amount;
+    if (t.type === "deposit" || t.type === "withdraw") { const p = partsOf(t), sign = t.type === "deposit" ? 1 : -1; for (const id in p) b[id] = (b[id] || 0) + sign * p[id]; }
     else if (t.type === "move") { b[t.from] = (b[t.from] || 0) - t.amount; b[t.to] = (b[t.to] || 0) + t.amount; }
     else if (t.type === "interest") for (const id in t.splits) b[id] = (b[id] || 0) + t.splits[id];
   }
   return b;
 }
 const totalOf = b => Object.values(b).reduce((a, c) => a + c, 0);
+/* Deposits/withdrawals can be split across buckets ({id: cents}); early entries used a single `bucket`. */
+const partsOf = t => t.parts || (t.bucket ? { [t.bucket]: t.amount } : {});
 const bucketName = id => (state.buckets.find(x => x.id === id) || { name: "(deleted bucket)" }).name;
 const activeBuckets = () => state.buckets.filter(x => !x.archived);
 
@@ -284,8 +297,11 @@ function render() {
 
 function rowHtml(t) {
   let what, meta = t.date, amt, cls = "";
-  if (t.type === "deposit") { what = "Deposit → " + esc(bucketName(t.bucket)); amt = "+" + fmt(t.amount); cls = "pos"; }
-  else if (t.type === "withdraw") { what = "Withdraw ← " + esc(bucketName(t.bucket)); amt = "−" + fmt(t.amount); cls = "neg"; }
+  if (t.type === "deposit" || t.type === "withdraw") {
+    const p = partsOf(t), ids = Object.keys(p), dep = t.type === "deposit";
+    what = (dep ? "Deposit → " : "Withdraw ← ") + ids.map(id => esc(bucketName(id))).join(", ");
+    if (ids.length > 1) meta += " · " + ids.map(id => esc(bucketName(id)) + " " + fmt(p[id])).join(", ");
+    amt = (dep ? "+" : "−") + fmt(t.amount); cls = dep ? "pos" : "neg"; }
   else if (t.type === "move") { what = esc(bucketName(t.from)) + " → " + esc(bucketName(t.to)); amt = fmt(t.amount); }
   else if (t.type === "btcInterest") { what = "BTC interest · " + shortDate(t.start) + " – " + shortDate(t.end); amt = "+" + fmtSats(t.sats); cls = "pos";
     meta = "Received " + t.date + " · " + Object.keys(t.splits).map(id => esc(bucketName(id)) + " " + t.pct[id].toFixed(2) + "% (" + t.splits[id].toLocaleString("en-US") + ")").join(", "); }
@@ -312,29 +328,61 @@ const noteField = '<label>Note (optional)</label><input id="f-note" maxlength="8
 const btns = label => '<div class="btns"><button class="pill" data-act="close">Cancel</button><button class="pill primary" id="f-go">' + label + '</button></div>';
 const val = id => ($(id) || {}).value || "";
 
-function sheetDeposit() {
-  open('<h3>Deposit</h3><p class="hint">Money added to Strike, and whose it is.</p>' +
-    '<label>Amount</label><input id="f-amt" inputmode="decimal" placeholder="0.00">' +
-    '<label>Into bucket</label><select id="f-b">' + bucketOpts() + '</select>' + dateField + noteField + btns("Add deposit"), () => {
-    $("f-go").onclick = () => {
-      const a = parseMoney(val("f-amt"));
-      if (!a) return showError("Amount isn't valid", "Nothing was saved. Do this: enter a dollar amount like 250 or 250.75, then tap Add deposit again.");
-      addTxn({ type: "deposit", amount: a, bucket: val("f-b") }); toast("Added " + fmt(a) + " to " + bucketName(val("f-b")));
+/* One Strike deposit/withdrawal, split across any number of buckets. The bucket amounts must add
+   up to exactly what Strike shows, and a withdrawal can't take more than a bucket holds. */
+function sheetSplit(kind) {
+  const dep = kind === "deposit", bal = balances(), list = activeBuckets();
+  open('<h3>' + (dep ? "Deposit" : "Withdraw") + '</h3><p class="hint">' + (dep ? "Enter the deposit Strike shows, then whose money it is." : "Enter the withdrawal Strike shows, then whose money it came out of.") + ' Split it across as many buckets as you need.</p>' +
+    '<label>Total ' + (dep ? "deposit" : "withdrawal") + ' in Strike</label><input id="f-amt" inputmode="decimal" placeholder="0.00">' +
+    '<label>' + (dep ? "Into" : "From") + ' buckets</label><div class="splits">' + list.map(b =>
+      '<div class="split-row" data-row="' + b.id + '"><div class="who"><b><span class="dot" style="background:' + b.color + '"></span>' + esc(b.name) + '</b><small>Has ' + fmt(bal[b.id] || 0) + '</small></div>' +
+      '<button class="pill" data-rest="' + b.id + '">Rest</button><input data-part="' + b.id + '" inputmode="decimal" placeholder="0.00"></div>').join("") + '</div>' +
+    '<div class="status" id="f-status"></div>' + dateField + noteField + btns(dep ? "Add deposit" : "Withdraw"), () => {
+    const inputs = [...$("sheet").querySelectorAll("[data-part]")];
+    const read = () => {
+      const total = parseMoney(val("f-amt")), parts = {}, bad = [];
+      let sum = 0;
+      for (const inp of inputs) {
+        const id = inp.dataset.part, raw = inp.value.trim(), row = inp.closest(".split-row"), note = row.querySelector("small");
+        let flag = "";
+        if (raw) {
+          const c = parseMoney(raw);
+          if (c === null) flag = "Not a valid amount";
+          else if (c > 0) { parts[id] = c; sum += c; if (!dep && c > (bal[id] || 0)) flag = "Only has " + fmt(bal[id] || 0) + " — over by " + fmt(c - (bal[id] || 0)); }
+        }
+        row.classList.toggle("bad", !!flag); note.classList.toggle("flag", !!flag);
+        note.textContent = flag || "Has " + fmt(bal[id] || 0);
+        if (flag) bad.push(bucketName(id) + ": " + flag);
+      }
+      return { total, parts, sum, bad };
     };
-  });
-}
-
-function sheetWithdraw() {
-  const bal = balances();
-  open('<h3>Withdraw</h3><p class="hint">Money taken out of Strike, and whose it was.</p>' +
-    '<label>Amount</label><input id="f-amt" inputmode="decimal" placeholder="0.00">' +
-    '<label>From bucket</label><select id="f-b">' + bucketOpts(null, bal) + '</select>' + dateField + noteField + btns("Withdraw"), () => {
+    const upd = () => {
+      const r = read(), st = $("f-status");
+      st.className = "status";
+      if (!r.total) st.textContent = r.sum ? "Assigned " + fmt(r.sum) + " — enter the total Strike shows" : "Enter the total, then split it";
+      else if (r.sum > r.total) { st.className = "status bad"; st.textContent = "⚠ Over by " + fmt(r.sum - r.total) + " — buckets add up to " + fmt(r.sum) + ", Strike shows " + fmt(r.total); }
+      else if (r.sum < r.total) { st.className = "status bad"; st.textContent = "⚠ " + fmt(r.total - r.sum) + " still unassigned of " + fmt(r.total); }
+      else if (r.bad.length) { st.className = "status bad"; st.textContent = "⚠ Adds up, but a bucket is overdrawn"; }
+      else { st.className = "status ok"; st.textContent = "✓ Adds up to " + fmt(r.total) + (Object.keys(r.parts).length > 1 ? " across " + Object.keys(r.parts).length + " buckets" : ""); }
+    };
+    $("f-amt").oninput = upd; inputs.forEach(i => i.oninput = upd);
+    $("sheet").querySelectorAll("[data-rest]").forEach(btn => btn.onclick = () => {
+      const r = read(), inp = inputs.find(i => i.dataset.part === btn.dataset.rest), mine = r.parts[btn.dataset.rest] || 0;
+      if (!r.total) return showError("Enter the total first", "Rest fills a bucket with whatever's left of the total. Do this: type the amount Strike shows at the top, then tap Rest.");
+      const left = r.total - (r.sum - mine);
+      if (left <= 0) return showError("Nothing left to assign", "The other buckets already cover the total. Do this: lower one of them first.");
+      inp.value = (left / 100).toFixed(2); upd();
+    });
+    upd();
     $("f-go").onclick = () => {
-      const a = parseMoney(val("f-amt")), id = val("f-b");
-      if (!a) return showError("Amount isn't valid", "Nothing was saved. Do this: enter a dollar amount like 250 or 250.75, then tap Withdraw again.");
-      if (a > (bal[id] || 0)) return showError(bucketName(id) + " only has " + fmt(bal[id] || 0),
-        "Nothing was saved. Do this: lower the amount, pick the bucket the money really came from, or Move money into " + bucketName(id) + " first.");
-      addTxn({ type: "withdraw", amount: a, bucket: id }); toast("Took " + fmt(a) + " from " + bucketName(id));
+      const r = read(), verb = dep ? "Add deposit" : "Withdraw";
+      if (!r.total) return showError("Total isn't valid", "Nothing was saved. Do this: enter the amount Strike shows, like 100 or 100.50.");
+      if (!r.sum) return showError("No bucket amounts entered", "Nothing was saved. Do this: type how much belongs to each bucket (or tap Rest on one bucket to give it the whole amount).");
+      if (r.bad.length) return showError("Fix the flagged bucket", "Nothing was saved. " + r.bad.join("; ") + ". Do this: correct that amount, then tap " + verb + " again.");
+      if (r.sum !== r.total) return showError(r.sum > r.total ? "Buckets add up to " + fmt(r.sum - r.total) + " too much" : fmt(r.total - r.sum) + " isn't assigned to a bucket",
+        "Nothing was saved. The buckets must add up to exactly " + fmt(r.total) + ". Do this: adjust the bucket amounts (or tap Rest on one), then tap " + verb + " again.");
+      addTxn({ type: kind, amount: r.total, parts: r.parts });
+      toast((dep ? "Added " : "Took ") + fmt(r.total) + (dep ? " to " : " from ") + Object.keys(r.parts).map(bucketName).join(", "));
     };
   });
 }
@@ -417,9 +465,9 @@ function sheetReconcile() {
       const d = a - total, res = $("f-res");
       if (d === 0) { res.innerHTML = '<div class="preview"><div class="r"><span>All accounted for. Every dollar has an owner.</span></div></div>'; $("f-go").textContent = "Done"; $("f-go").onclick = close; }
       else if (d > 0) {
-        res.innerHTML = '<div class="preview"><div class="r"><span>Strike has <b>' + fmt(d) + '</b> more than tracked.</span></div><div class="r"><span>Probably a deposit that isn\'t logged yet. Log it with Deposit into the right bucket. (BTC interest doesn\'t land in cash, so it never shows up here.)</span></div></div>';
+        res.innerHTML = '<div class="preview"><div class="r"><span>Strike has <b>' + fmt(d) + '</b> more than tracked.</span></div><div class="r"><span>Probably a deposit that isn\'t logged yet. Log it with Deposit into the right buckets. (BTC interest doesn\'t land in cash, so it never shows up here.)</span></div></div>';
       } else {
-        res.innerHTML = '<div class="preview"><div class="r"><span>Strike has <b>' + fmt(-d) + '</b> less than tracked.</span></div><div class="r"><span>Probably a withdrawal or BTC buy that isn\'t logged. Log it with Withdraw from the right bucket.</span></div></div>';
+        res.innerHTML = '<div class="preview"><div class="r"><span>Strike has <b>' + fmt(-d) + '</b> less than tracked.</span></div><div class="r"><span>Probably a withdrawal or BTC buy that isn\'t logged. Log it with Withdraw from the right buckets.</span></div></div>';
       }
     };
     $("f-go").onclick = check;
@@ -452,7 +500,7 @@ function sheetManage() {
       if (v !== 0) return showError(bucketName(id) + " still holds " + fmt(v),
         "Nothing was removed. Do this: Move its money to another bucket (or Withdraw it), then remove it.");
       const b = state.buckets.find(x => x.id === id);
-      if (state.txns.some(t => t.bucket === id || t.from === id || t.to === id || (t.splits && t.splits[id]))) b.archived = true; // keep history readable
+      if (state.txns.some(t => partsOf(t)[id] || t.from === id || t.to === id || (t.splits && t.splits[id]))) b.archived = true; // keep history readable
       else state.buckets = state.buckets.filter(x => x.id !== id);
       save(); render(); sheetManage(); toast("Removed " + b.name);
     });
@@ -490,15 +538,16 @@ document.addEventListener("click", e => {
     const t = state.txns.find(x => x.id === del.dataset.del); if (!t) return;
     if (!confirm("Delete this entry? Balances will be recalculated.")) return;
     const bal = balances();
-    if (t.type === "deposit" && (bal[t.bucket] || 0) - t.amount < 0)
-      return showError("Can't delete that deposit yet", "Later entries spend that money, so " + bucketName(t.bucket) + " would go negative. Nothing changed. Do this: delete the later withdrawal or move first.");
+    const short = t.type === "deposit" && Object.entries(partsOf(t)).find(([id, c]) => (bal[id] || 0) - c < 0);
+    if (short)
+      return showError("Can't delete that deposit yet", "Later entries spend that money, so " + bucketName(short[0]) + " would go negative. Nothing changed. Do this: delete the later withdrawal or move first.");
     if (t.type === "move" && (bal[t.to] || 0) - t.amount < 0)
       return showError("Can't delete that move yet", "Later entries spend that money, so " + bucketName(t.to) + " would go negative. Nothing changed. Do this: delete the later entry first.");
     state.txns = state.txns.filter(x => x.id !== t.id); save(); render(); toast("Entry deleted");
     return;
   }
   const b = e.target.closest("[data-act]"); if (!b || b.disabled) return;
-  ({ deposit: sheetDeposit, withdraw: sheetWithdraw, move: sheetMove, interest: sheetBtcInterest, reconcile: sheetReconcile,
+  ({ deposit: () => sheetSplit("deposit"), withdraw: () => sheetSplit("withdraw"), move: sheetMove, interest: sheetBtcInterest, reconcile: sheetReconcile,
      manage: sheetManage, export: exportJson, import: () => $("file").click(), close,
      toggleAll: () => { showAll = !showAll; render(); } })[b.dataset.act]();
 });
