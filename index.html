@@ -75,14 +75,16 @@ h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: upp
 .foot .pill { font-size: 14px; padding: 8px 14px; }
 .note { color: var(--muted); font-size: 12px; text-align: center; margin-top: 16px; }
 /* sheet */
-.shade { position: fixed; inset: 0; background: var(--shade); display: none; align-items: flex-end; justify-content: center; z-index: 10; }
+.shade { position: fixed; inset: 0; background: var(--shade); display: none; align-items: flex-end; justify-content: center; z-index: 10; overscroll-behavior: contain; padding-top: calc(env(safe-area-inset-top) + 8px); }
 .shade.open { display: flex; }
 @media (min-width: 600px) { .shade { align-items: center; } }
-.sheet { background: var(--bg); width: 100%; max-width: 460px; border-radius: 20px 20px 0 0; padding: 20px 16px calc(env(safe-area-inset-bottom) + 20px); max-height: 92vh; overflow: auto; }
+.sheet { background: var(--bg); width: 100%; max-width: 460px; border-radius: 20px 20px 0 0; padding: 20px 16px calc(env(safe-area-inset-bottom) + 20px); max-height: calc(100vh - env(safe-area-inset-top) - 8px); max-height: calc(100dvh - env(safe-area-inset-top) - 8px); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 @media (min-width: 600px) { .sheet { border-radius: 20px; } }
 .sheet h3 { margin: 0 0 4px; font-size: 20px; }
 .sheet .hint { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
 label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+input[type=date] { -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%; min-height: 46px; text-align: left; }
+input[type=date]::-webkit-date-and-time-value { text-align: left; }
 input, select { width: 100%; font: inherit; font-size: 17px; color: var(--ink); background: var(--field); border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px; }
 input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .btns { display: flex; gap: 8px; margin-top: 20px; }
@@ -313,12 +315,27 @@ function rowHtml(t) {
 }
 
 /* ---------- sheets ---------- */
+/* Freeze the page behind an open sheet. iOS Safari ignores overflow:hidden on body,
+   so pin the body in place and restore the scroll position on close. */
+let lockedY = null;
+function lockScroll() {
+  if (lockedY !== null) return;
+  lockedY = window.scrollY;
+  Object.assign(document.body.style, { position: "fixed", top: -lockedY + "px", left: "0", right: "0", width: "100%", overflow: "hidden" });
+}
+function unlockScroll() {
+  if (lockedY === null) return;
+  Object.assign(document.body.style, { position: "", top: "", left: "", right: "", width: "", overflow: "" });
+  window.scrollTo(0, lockedY); lockedY = null;
+}
 function open(html, onReady) {
-  $("sheet").innerHTML = html; $("shade").classList.add("open");
+  const fresh = lockedY === null;
+  $("sheet").innerHTML = html; $("shade").classList.add("open"); lockScroll();
+  if (fresh) $("sheet").scrollTop = 0;
   const first = $("sheet").querySelector("input,select"); if (first && matchMedia("(pointer:fine)").matches) first.focus();
   if (onReady) onReady();
 }
-function close() { $("shade").classList.remove("open"); $("sheet").innerHTML = ""; }
+function close() { $("shade").classList.remove("open"); $("sheet").innerHTML = ""; unlockScroll(); }
 $("shade").addEventListener("click", e => { if (e.target.id === "shade") close(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") close(); });
 
