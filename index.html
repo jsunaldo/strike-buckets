@@ -111,6 +111,10 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 20px); transform: translateX(-50%); max-width: min(520px, calc(100% - 32px));
   background: var(--ink); color: var(--bg); border-radius: 14px; padding: 12px 16px; font-size: 14px; z-index: 20; display: none; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
 .toast.err { background: var(--neg); color: #fff; }
+.update { position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 10px); transform: translateX(-50%); width: max-content; max-width: calc(100% - 32px); display: none; align-items: center; gap: 12px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 6px 6px 6px 16px; font-size: 14px; z-index: 30; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+.update.show { display: flex; }
+.update .pill { padding: 7px 14px; font-size: 14px; }
 .toast.show { display: block; }
 .toast b { display: block; margin-bottom: 2px; }
 .toast .close { float: right; margin-left: 12px; cursor: pointer; opacity: .8; }
@@ -143,14 +147,17 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
     <button class="pill" data-act="import">Restore</button>
   </div>
   <p class="note">Stored only in this browser on this device. Back up after changes you care about.</p>
+  <p class="note"><span id="ver"></span> · <a href="#" id="upd-check" style="color:inherit">Check for updates</a></p>
   <input type="file" id="file" accept="application/json,.json" hidden>
 </main>
 
 <div class="shade" id="shade"><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
 <div class="toast" id="toast" role="status"></div>
+<div class="update" id="update" role="status"><span>A new version is ready.</span><button class="pill primary" id="upd-go">Update now</button></div>
 
 <script>
 "use strict";
+const APP_VERSION = "2026-10-19.4"; // bump on every release — the update check compares this
 const KEY = "strike-buckets-v1";
 const COLORS = ["#0a84ff", "#30d158", "#ff9f0a", "#bf5af2", "#ff375f", "#64d2ff", "#ffd60a", "#ac8e68"];
 
@@ -588,12 +595,42 @@ window.addEventListener("unhandledrejection", e => showError("Something broke", 
 
 /* manifest so Add to Home Screen opens full-screen */
 (() => {
-  const m = { name: "Strike Buckets", short_name: "Buckets", display: "standalone", background_color: "#000000", theme_color: "#000000", start_url: location.href.split("#")[0] };
+  const m = { name: "Strike Buckets", short_name: "Buckets", display: "standalone", background_color: "#000000", theme_color: "#000000", start_url: location.origin + location.pathname };
   const l = document.createElement("link"); l.rel = "manifest";
   l.href = "data:application/manifest+json," + encodeURIComponent(JSON.stringify(m)); document.head.appendChild(l);
 })();
 
-load(); render();
+/* ---------- updates ----------
+   A Home Screen app on iOS resumes from memory instead of reloading, and GitHub Pages lets the
+   phone reuse its cached copy, so it can sit on an old version. On open and every time the app
+   comes back to the foreground, fetch the live page (bypassing the cache, which also refreshes it)
+   and offer a reload if its version differs. Your data is in localStorage and survives updates. */
+const BASE = location.origin + location.pathname;
+let newVersion = null, lastCheck = 0;
+async function checkForUpdate(manual) {
+  if (!manual && Date.now() - lastCheck < 60000) return;
+  lastCheck = Date.now();
+  try {
+    const res = await fetch(BASE, { cache: "reload" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const m = (await res.text()).match(/const APP_VERSION = "([^"]+)"/);
+    if (m && m[1] !== APP_VERSION) { newVersion = m[1]; $("update").classList.add("show"); }
+    else if (manual) toast("You're on the latest version (" + APP_VERSION + ")");
+  } catch (e) {
+    if (manual) showError("Couldn't check for updates", "You're probably offline. Your data is safe. Do this: connect to the internet, then tap Check for updates again.");
+  }
+}
+$("upd-go").onclick = () => {
+  if ($("shade").classList.contains("open") && !confirm("Update now? The form you have open will be closed without saving.")) return;
+  location.replace(BASE + "?v=" + encodeURIComponent(newVersion)); // new URL forces a fresh load; data is untouched
+};
+$("upd-check").onclick = e => { e.preventDefault(); checkForUpdate(true); };
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(); });
+window.addEventListener("pageshow", e => { if (e.persisted) checkForUpdate(); });
+$("ver").textContent = "Version " + APP_VERSION;
+if (location.search) history.replaceState(null, "", BASE); // drop ?v= so the Home Screen URL stays clean
+
+load(); render(); checkForUpdate();
 </script>
 </body>
 </html>
