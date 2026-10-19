@@ -29,8 +29,20 @@ h1 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 0; letter-s
 .sub { color: var(--muted); font-size: 14px; }
 .sub.warn { color: var(--neg); }
 h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 32px 0 10px; }
-.actions { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 20px; }
-@media (max-width: 520px) { .actions { grid-template-columns: repeat(3, 1fr); } .actions .pill { padding: 10px 6px; white-space: nowrap; } }
+.actions { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; margin-top: 24px; max-width: 460px; }
+.act { appearance: none; background: none; border: 0; padding: 0; font: inherit; color: var(--ink); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; -webkit-tap-highlight-color: transparent; }
+.act .circle { width: 56px; height: 56px; border-radius: 50%; background: var(--card); border: 1px solid var(--line); display: grid; place-items: center; font-size: 24px; line-height: 1; transition: transform .1s; }
+.act small { font-size: 12px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+.act:active:not(:disabled) .circle { transform: scale(.92); }
+.act:hover:not(:disabled) .circle { border-color: var(--muted); }
+.act:disabled { opacity: .35; cursor: default; }
+@media (max-width: 340px) { .act .circle { width: 48px; height: 48px; font-size: 21px; } .act small { font-size: 11px; } }
+.filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-bottom: 8px; }
+.filters select { font-size: 15px; padding: 9px 12px; border-radius: 999px; }
+.filters select.on { border-color: var(--accent); color: var(--accent); }
+.fsum { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; margin: 0 4px 8px; }
+.fsum a { color: var(--accent); text-decoration: none; }
+.row .amt small { display: block; text-align: right; font-weight: 400; font-size: 12px; color: var(--muted); }
 .pill { appearance: none; border: 1px solid var(--line); background: var(--card); color: var(--ink);
   border-radius: 999px; padding: 10px 14px; font: inherit; font-size: 15px; font-weight: 500; cursor: pointer; }
 .pill.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -128,17 +140,24 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
   <div class="sub btc" id="btcsum"></div>
 
   <div class="actions">
-    <button class="pill primary" data-act="deposit">Deposit</button>
-    <button class="pill" data-act="withdraw">Withdraw</button>
-    <button class="pill" data-act="move">Move</button>
-    <button class="pill" data-act="interest">BTC interest</button>
-    <button class="pill" data-act="reconcile">Reconcile</button>
+    <button class="act" data-act="deposit"><span class="circle">📥</span><small>Deposit</small></button>
+    <button class="act" data-act="withdraw"><span class="circle">📤</span><small>Withdraw</small></button>
+    <button class="act" data-act="move"><span class="circle">🔁</span><small>Move</small></button>
+    <button class="act" data-act="interest" aria-label="BTC interest"><span class="circle">🪙</span><small>Interest</small></button>
+    <button class="act" data-act="reconcile"><span class="circle">✅</span><small>Reconcile</small></button>
   </div>
 
   <h2>Buckets</h2>
   <div id="buckets"></div>
 
   <h2>Activity</h2>
+  <div class="filters" id="filters">
+    <select id="flt-type" aria-label="Filter by type">
+      <option value="">All types</option><option value="deposit">Deposits</option><option value="withdraw">Withdrawals</option>
+      <option value="move">Moves</option><option value="interest">Interest</option>
+    </select>
+    <select id="flt-bucket" aria-label="Filter by bucket"></select>
+  </div>
   <div id="activity"></div>
 
   <div class="foot">
@@ -157,13 +176,14 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 
 <script>
 "use strict";
-const APP_VERSION = "2026-10-19.4"; // bump on every release — the update check compares this
+const APP_VERSION = "2026-10-19.5"; // bump on every release — the update check compares this
 const KEY = "strike-buckets-v1";
 const COLORS = ["#0a84ff", "#30d158", "#ff9f0a", "#bf5af2", "#ff375f", "#64d2ff", "#ffd60a", "#ac8e68"];
 
 /* ---------- state ---------- */
 let state = { buckets: [], txns: [], lastRecon: null };
 let showAll = false;
+const filter = { type: "", bucket: "" };
 let storageOk = true;
 
 function load() {
@@ -295,16 +315,35 @@ function render() {
     (total > 0 ? '<div class="bar">' + list.map(b => '<span style="background:' + b.color + ';width:' + Math.max(0, (bal[b.id] || 0) / total * 100) + '%"></span>').join("") + '</div>' : "");
   }
 
-  const tx = state.txns.slice().sort((a, b) => (b.date + b.created).localeCompare(a.date + a.created));
-  const shown = showAll ? tx : tx.slice(0, 25);
-  $("activity").innerHTML = !tx.length ? '<div class="empty">Nothing logged yet.</div>' :
-    '<div class="list">' + shown.map(rowHtml).join("") +
-    (tx.length > 25 ? '<div class="row more"><button class="pill" data-act="toggleAll">' + (showAll ? "Show recent" : "Show all " + tx.length) + '</button></div>' : "") + '</div>';
+  // bucket filter lists every bucket that has history, removed ones included
+  const fb = $("flt-bucket"), used = state.buckets.filter(b => !b.archived || state.txns.some(t => share(t, b.id)));
+  if (filter.bucket && !used.some(b => b.id === filter.bucket)) filter.bucket = "";
+  fb.innerHTML = '<option value="">All buckets</option>' + used.map(b => '<option value="' + b.id + '">' + esc(b.name) + (b.archived ? " (removed)" : "") + '</option>').join("");
+  fb.value = filter.bucket; $("flt-type").value = filter.type;
+  fb.classList.toggle("on", !!filter.bucket); $("flt-type").classList.toggle("on", !!filter.type);
+  $("filters").style.display = state.txns.length ? "" : "none";
+
+  const all = state.txns.slice().sort((a, b) => (b.date + b.created).localeCompare(a.date + a.created));
+  const tx = all.filter(t => (!filter.type || typeKey(t) === filter.type) && (!filter.bucket || share(t, filter.bucket)));
+  const shown = showAll ? tx : tx.slice(0, 25), filtered = filter.type || filter.bucket;
+  $("activity").innerHTML = !all.length ? '<div class="empty">Nothing logged yet.</div>' :
+    (filtered ? '<div class="fsum"><span>' + tx.length + ' of ' + all.length + ' entries</span><a href="#" data-act="clearFilters">Clear filters</a></div>' : "") +
+    (!tx.length ? '<div class="empty">No entries match these filters.</div>' :
+    '<div class="list">' + shown.map(t => rowHtml(t, filter.bucket)).join("") +
+    (tx.length > 25 ? '<div class="row more"><button class="pill" data-act="toggleAll">' + (showAll ? "Show recent" : "Show all " + tx.length) + '</button></div>' : "") + '</div>');
 
   document.querySelectorAll('[data-act="withdraw"],[data-act="move"],[data-act="interest"],[data-act="deposit"]').forEach(b => b.disabled = !list.length);
 }
 
-function rowHtml(t) {
+const typeKey = t => t.type === "btcInterest" ? "interest" : t.type;
+/* This bucket's piece of an entry, or null if the entry doesn't touch it. */
+function share(t, id) {
+  if (t.type === "deposit" || t.type === "withdraw") { const c = partsOf(t)[id]; return c ? { text: (t.type === "deposit" ? "+" : "−") + fmt(c), cls: t.type === "deposit" ? "pos" : "neg", whole: Object.keys(partsOf(t)).length > 1 } : null; }
+  if (t.type === "move") return t.from === id ? { text: "−" + fmt(t.amount), cls: "neg" } : t.to === id ? { text: "+" + fmt(t.amount), cls: "pos" } : null;
+  if (t.splits && t.splits[id]) return { text: "+" + (t.type === "btcInterest" ? fmtSats(t.splits[id]) : fmt(t.splits[id])), cls: "pos", whole: Object.keys(t.splits).length > 1 };
+  return null;
+}
+function rowHtml(t, focus) {
   let what, meta = t.date, amt, cls = "";
   if (t.type === "deposit" || t.type === "withdraw") {
     const p = partsOf(t), ids = Object.keys(p), dep = t.type === "deposit";
@@ -317,6 +356,8 @@ function rowHtml(t) {
   else { what = "Interest (cash)"; amt = "+" + fmt(t.amount); cls = "pos";
     meta += " · " + Object.keys(t.splits).map(id => esc(bucketName(id)) + " " + fmt(t.splits[id])).join(", "); }
   if (t.note) meta += " · " + esc(t.note);
+  const mine = focus && share(t, focus); // filtered to one bucket: show its piece, with the Strike total underneath
+  if (mine) { cls = mine.cls; amt = mine.text + (mine.whole ? "<small>of " + (t.type === "btcInterest" ? fmtSats(t.sats) : fmt(t.amount)) + "</small>" : ""); }
   return '<div class="row"><div class="main"><div class="what">' + what + '</div><div class="meta">' + meta + '</div></div>' +
     '<div class="amt ' + cls + '">' + amt + '</div><button class="x" title="Delete" data-del="' + t.id + '">×</button></div>';
 }
@@ -573,7 +614,8 @@ document.addEventListener("click", e => {
   const b = e.target.closest("[data-act]"); if (!b || b.disabled) return;
   ({ deposit: () => sheetSplit("deposit"), withdraw: () => sheetSplit("withdraw"), move: sheetMove, interest: sheetBtcInterest, reconcile: sheetReconcile,
      manage: sheetManage, export: exportJson, import: () => $("file").click(), close,
-     toggleAll: () => { showAll = !showAll; render(); } })[b.dataset.act]();
+     toggleAll: () => { showAll = !showAll; render(); },
+     clearFilters: () => { e.preventDefault(); filter.type = filter.bucket = ""; render(); } })[b.dataset.act]();
 });
 
 /* ---------- toasts ---------- */
@@ -629,6 +671,9 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 window.addEventListener("pageshow", e => { if (e.persisted) checkForUpdate(); });
 $("ver").textContent = "Version " + APP_VERSION;
 if (location.search) history.replaceState(null, "", BASE); // drop ?v= so the Home Screen URL stays clean
+
+$("flt-type").onchange = e => { filter.type = e.target.value; showAll = false; render(); };
+$("flt-bucket").onchange = e => { filter.bucket = e.target.value; showAll = false; render(); };
 
 load(); render(); checkForUpdate();
 </script>
