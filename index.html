@@ -165,7 +165,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
     <button class="pill" data-act="export">Back up</button>
     <button class="pill" data-act="import">Restore</button>
   </div>
-  <p class="note">Stored only in this browser on this device. Back up after changes you care about.</p>
+  <p class="note">Stored only on this device. Back up after changes you care about: on iPhone, tap Back up → Save to Files → iCloud Drive.</p>
   <p class="note"><span id="ver"></span> · <a href="#" id="upd-check" style="color:inherit">Check for updates</a></p>
   <input type="file" id="file" accept="application/json,.json" hidden>
 </main>
@@ -176,7 +176,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 
 <script>
 "use strict";
-const APP_VERSION = "2026-10-19.5"; // bump on every release — the update check compares this
+const APP_VERSION = "2026-10-19.6"; // bump on every release — the update check compares this
 const KEY = "strike-buckets-v1";
 const COLORS = ["#0a84ff", "#30d158", "#ff9f0a", "#bf5af2", "#ff375f", "#64d2ff", "#ffd60a", "#ac8e68"];
 
@@ -579,9 +579,23 @@ function addTxn(t) {
 }
 
 /* ---------- backup ---------- */
-function exportJson() {
-  const blob = new Blob([JSON.stringify({ app: "strike-buckets", version: 1, exported: new Date().toISOString(), ...state }, null, 2)], { type: "application/json" });
-  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "strike-buckets-" + today() + ".json";
+/* On iPhone, open the share sheet so the backup can go to Files → iCloud Drive (Files remembers
+   the last folder used). Elsewhere, or if sharing files isn't supported, fall back to a download. */
+async function exportJson() {
+  const json = JSON.stringify({ app: "strike-buckets", version: 1, exported: new Date().toISOString(), ...state }, null, 2);
+  const name = "strike-buckets-" + today() + ".json";
+  const file = typeof File === "function" ? new File([json], name, { type: "application/json" }) : null;
+  if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file] });
+      toast("Backup saved");
+      return;
+    } catch (e) {
+      if (e && e.name === "AbortError") return toast("Backup cancelled — nothing was saved");
+      // any other share failure: fall through to the download below
+    }
+  }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([json], { type: "application/json" })); a.download = name;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   toast("Backup downloaded");
 }
