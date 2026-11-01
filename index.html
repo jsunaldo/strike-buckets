@@ -204,7 +204,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 
 <script>
 "use strict";
-const APP_VERSION = "2026-11-01.2"; // bump on every release — the update check compares this
+const APP_VERSION = "2026-11-01.3"; // bump on every release — the update check compares this
 const KEY = "strike-buckets-v1";
 const COLORS = ["#0a84ff", "#30d158", "#ff9f0a", "#bf5af2", "#ff375f", "#64d2ff", "#ffd60a", "#ac8e68"];
 
@@ -244,9 +244,10 @@ function parseMoney(str) {
   if (!/^\d*(\.\d{0,2})?$/.test(s) || s === "" || s === ".") return null;
   return Math.round(parseFloat(s) * 100);
 }
-/* Hide amounts (the eye button): every balance, amount and sats figure renders as •••• until tapped again. */
-const HIDE_KEY = "strike-buckets-hide";
-let hidden = false; try { hidden = localStorage.getItem(HIDE_KEY) === "1"; } catch (e) {}
+/* Hide amounts: every balance, amount and sats figure renders as ••••. Always hidden when the app
+   opens or comes back; tap the eye (or shake the phone) to reveal. */
+let hidden = true;
+try { localStorage.removeItem("strike-buckets-hide"); } catch (e) {} // old "remember my choice" setting, no longer used
 const MASK = "••••";
 const fmtRaw = c => (c < 0 ? "-" : "") + "$" + (Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmt = c => hidden ? "$" + MASK : fmtRaw(c);
@@ -410,14 +411,15 @@ function unlockScroll() {
   Object.assign(document.body.style, { position: "", top: "", left: "", right: "", width: "", overflow: "" });
   window.scrollTo(0, lockedY); lockedY = null;
 }
+let rebuildSheet = null; // set by read-only sheets (bucket, entry) so a reveal can redraw them
 function open(html, onReady) {
-  const fresh = lockedY === null;
+  const fresh = lockedY === null; rebuildSheet = null;
   $("sheet").innerHTML = html; $("shade").classList.add("open"); lockScroll();
   if (fresh) $("sheet").scrollTop = 0;
   const first = $("sheet").querySelector("input,select"); if (first && matchMedia("(pointer:fine)").matches) first.focus();
   if (onReady) onReady();
 }
-function close() { $("shade").classList.remove("open"); $("sheet").innerHTML = ""; unlockScroll(); }
+function close() { $("shade").classList.remove("open"); $("sheet").innerHTML = ""; rebuildSheet = null; unlockScroll(); }
 $("shade").addEventListener("click", e => { if (e.target.id === "shade") close(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") close(); });
 
@@ -614,6 +616,7 @@ function sheetBucket(id) {
     '<div class="tiles">' + tiles + '</div>' + (st.pays.length ? '<div class="pricenote" id="t-price"></div>' : "") +
     (hist ? '<label>Payouts (sats)</label><div class="preview">' + hist + '</div>' : "") +
     '<div class="btns"><button class="pill" data-act="close">Close</button><button class="pill primary" id="f-acts">See activity</button></div>', () => {
+    rebuildSheet = () => sheetBucket(id);
     $("f-acts").onclick = () => { filter.bucket = id; filter.type = ""; showAll = false; close(); render(); $("filters").scrollIntoView({ behavior: "smooth", block: "start" }); };
     if (!st.pays.length) return;
     btcPrice().then(p => {
@@ -694,6 +697,7 @@ function sheetEntry(tid, from) {
   open('<h3>' + title + '</h3><p class="hint">' + hint + (me ? ' · showing ' + esc(bucketName(me)) : "") + '</p>' +
     (tiles ? '<div class="tiles">' + tiles + '</div>' : "") + (live ? '<div class="pricenote" id="e-price"></div>' : "") + body +
     '<div class="btns">' + (from ? '<button class="pill" id="e-back">‹ Back</button>' : "") + '<button class="pill' + (from ? "" : " primary") + '" data-act="close">Close</button></div>', () => {
+    rebuildSheet = () => sheetEntry(tid, from);
     if (from) $("e-back").onclick = () => sheetBucket(from);
     if (!live) return;
     btcPrice().then(p => {
@@ -890,11 +894,36 @@ $("flt-bucket").onchange = e => { filter.bucket = e.target.value; showAll = fals
 const EYE_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_SHUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
 function paintEye() { const b = $("eye"); b.innerHTML = hidden ? EYE_SHUT : EYE_OPEN; b.classList.toggle("on", hidden); b.setAttribute("aria-label", hidden ? "Show amounts" : "Hide amounts"); }
-$("eye").onclick = () => {
-  hidden = !hidden; try { localStorage.setItem(HIDE_KEY, hidden ? "1" : "0"); } catch (e) {}
-  if ($("shade").classList.contains("open")) close();
-  paintEye(); render();
-};
+function setHidden(h) {
+  if (hidden === h) return;
+  hidden = h; paintEye(); render();
+  if (rebuildSheet) rebuildSheet(); // forms stay open as-is so nothing typed is lost
+}
+$("eye").onclick = () => { askMotion(); setHidden(!hidden); };
+// Leaving the app (home, app switcher, lock) hides amounts again for next time.
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") setHidden(true); });
+window.addEventListener("pagehide", () => setHidden(true));
+
+/* Shake to reveal (shake again to hide). iPhone asks once for motion access; that prompt can only
+   come from a tap, so it's asked the first time you tap the eye. */
+let shakeAt = 0, peaks = [];
+function onMotion(e) {
+  const a = e.acceleration && e.acceleration.x != null ? e.acceleration : null;
+  const g = a ? null : e.accelerationIncludingGravity;
+  if (!a && !g) return;
+  const m = a ? Math.hypot(a.x, a.y, a.z) : Math.abs(Math.hypot(g.x, g.y, g.z) - 9.81);
+  const now = Date.now();
+  if (m < 14) return;                                       // a firm shake, not a bump or a walk
+  peaks = peaks.filter(t => now - t < 700); peaks.push(now);
+  if (peaks.length >= 3 && now - shakeAt > 1200) { shakeAt = now; peaks = []; setHidden(!hidden); }
+}
+window.addEventListener("devicemotion", onMotion);
+let motionAsked = false;
+function askMotion() {
+  if (motionAsked || typeof DeviceMotionEvent === "undefined" || typeof DeviceMotionEvent.requestPermission !== "function") return;
+  motionAsked = true;
+  DeviceMotionEvent.requestPermission().catch(() => {}); // once granted, the devicemotion listener above starts getting events
+}
 paintEye();
 
 load(); render(); checkForUpdate();
