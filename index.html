@@ -24,6 +24,10 @@ html, body { margin: 0; background: var(--bg); color: var(--ink);
   font: 16px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased; }
 main { max-width: 860px; margin: 0 auto; padding: calc(env(safe-area-inset-top) + 24px) 16px calc(env(safe-area-inset-bottom) + 40px); }
+.head { display: flex; align-items: center; justify-content: space-between; }
+.eye { appearance: none; border: 1px solid var(--line); background: var(--card); color: var(--muted); width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; padding: 0; }
+.eye svg { width: 18px; height: 18px; }
+.eye.on { color: var(--accent); border-color: var(--accent); }
 h1 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 0; letter-spacing: .02em; text-transform: uppercase; }
 .total { font-size: 44px; font-weight: 700; letter-spacing: -.02em; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
 .sub { color: var(--muted); font-size: 14px; }
@@ -67,10 +71,6 @@ h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: upp
 .tile .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .pricenote { color: var(--muted); font-size: 12px; margin-top: 8px; }
 .pricenote.bad { color: var(--neg); }
-/* privacy cover: hides balances in the iPhone app switcher, like Strike's logo screen */
-.cover { position: fixed; inset: 0; z-index: 100; background: #000; display: none; place-items: center; }
-.cover.show { display: grid; }
-.cover .logo { width: 88px; height: 88px; border-radius: 22px; background: #111113; border: 1px solid rgba(255,255,255,.12); display: grid; place-items: center; font-size: 44px; }
 .sub.btc { color: #f7931a; }
 .preview .r.head { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
 .preview .r span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
@@ -94,6 +94,16 @@ h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: upp
 .row { display: flex; gap: 12px; align-items: center; padding: 12px 16px; }
 .row + .row { border-top: 1px solid var(--line); }
 .row .main { flex: 1; min-width: 0; }
+.row[data-entry], .preview .r[data-entry] { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.row[data-entry]:active, .preview .r[data-entry]:active { background: var(--line); }
+.preview .r[data-entry] > span:last-child::after { content: " ›"; color: var(--muted); }
+.kv { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px; margin-top: 14px; font-size: 14px; }
+.kv .r { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; }
+.kv .r + .r { border-top: 1px solid var(--line); }
+.kv .r > span:first-child { color: var(--muted); }
+.kv .r > span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.kv .r small { color: var(--muted); font-weight: 400; }
+.kv .r.me { font-weight: 600; } .kv .r.me > span:first-child { color: var(--ink); }
 .row .what { font-weight: 500; }
 .row .meta { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
 .row .amt { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
@@ -152,7 +162,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 </head>
 <body>
 <main>
-  <h1>Strike cash</h1>
+  <div class="head"><h1>Strike cash</h1><button class="eye" id="eye" aria-label="Hide amounts"></button></div>
   <div class="total" id="total">$0.00</div>
   <div class="sub" id="recon">Not reconciled yet</div>
   <div class="sub btc" id="btcsum"></div>
@@ -190,12 +200,11 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 
 <div class="shade" id="shade"><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
 <div class="toast" id="toast" role="status"></div>
-<div class="cover" id="cover" aria-hidden="true"><div class="logo">🪣</div></div>
 <div class="update" id="update" role="status"><span>A new version is ready.</span><button class="pill primary" id="upd-go">Update now</button></div>
 
 <script>
 "use strict";
-const APP_VERSION = "2026-11-01.1"; // bump on every release — the update check compares this
+const APP_VERSION = "2026-11-01.2"; // bump on every release — the update check compares this
 const KEY = "strike-buckets-v1";
 const COLORS = ["#0a84ff", "#30d158", "#ff9f0a", "#bf5af2", "#ff375f", "#64d2ff", "#ffd60a", "#ac8e68"];
 
@@ -235,7 +244,13 @@ function parseMoney(str) {
   if (!/^\d*(\.\d{0,2})?$/.test(s) || s === "" || s === ".") return null;
   return Math.round(parseFloat(s) * 100);
 }
-const fmt = c => (c < 0 ? "-" : "") + "$" + (Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/* Hide amounts (the eye button): every balance, amount and sats figure renders as •••• until tapped again. */
+const HIDE_KEY = "strike-buckets-hide";
+let hidden = false; try { hidden = localStorage.getItem(HIDE_KEY) === "1"; } catch (e) {}
+const MASK = "••••";
+const fmtRaw = c => (c < 0 ? "-" : "") + "$" + (Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmt = c => hidden ? "$" + MASK : fmtRaw(c);
+const num = n => hidden ? MASK : n.toLocaleString("en-US");
 
 /* Cash balances. With `asOf` (YYYY-MM-DD), only entries dated on or before that day count. */
 function balances(asOf) {
@@ -276,8 +291,8 @@ function parseSats(str) {
   if (!m || (m[1] === "" && m[2] === "")) return null;
   return (parseInt(m[1] || "0", 10) * 1e8 + parseInt((m[2] + "00000000").slice(0, 8), 10)) || null;
 }
-const fmtSats = n => n.toLocaleString("en-US") + " sats";
-const fmtBtc = n => (n / 1e8).toFixed(8) + " BTC";
+const fmtSats = n => num(n) + " sats";
+const fmtBtc = n => (hidden ? MASK : (n / 1e8).toFixed(8)) + " BTC";
 const DAY = 86400000;
 const iso = ms => new Date(ms).toISOString().slice(0, 10);
 const utc = d => Date.parse(d + "T00:00:00Z");
@@ -371,13 +386,13 @@ function rowHtml(t, focus) {
     amt = (dep ? "+" : "−") + fmt(t.amount); cls = dep ? "pos" : "neg"; }
   else if (t.type === "move") { what = esc(bucketName(t.from)) + " → " + esc(bucketName(t.to)); amt = fmt(t.amount); }
   else if (t.type === "btcInterest") { what = "BTC interest · " + shortDate(t.start) + " – " + shortDate(t.end); amt = "+" + fmtSats(t.sats); cls = "pos";
-    meta = "Received " + t.date + " · " + Object.keys(t.splits).map(id => esc(bucketName(id)) + " " + t.pct[id].toFixed(2) + "% (" + t.splits[id].toLocaleString("en-US") + ")").join(", "); }
+    meta = "Received " + t.date + " · " + Object.keys(t.splits).map(id => esc(bucketName(id)) + " " + t.pct[id].toFixed(2) + "% (" + num(t.splits[id]) + ")").join(", "); }
   else { what = "Interest (cash)"; amt = "+" + fmt(t.amount); cls = "pos";
     meta += " · " + Object.keys(t.splits).map(id => esc(bucketName(id)) + " " + fmt(t.splits[id])).join(", "); }
   if (t.note) meta += " · " + esc(t.note);
   const mine = focus && share(t, focus); // filtered to one bucket: show its piece, with the Strike total underneath
   if (mine) { cls = mine.cls; amt = mine.text + (mine.whole ? "<small>of " + (t.type === "btcInterest" ? fmtSats(t.sats) : fmt(t.amount)) + "</small>" : ""); }
-  return '<div class="row"><div class="main"><div class="what">' + what + '</div><div class="meta">' + meta + '</div></div>' +
+  return '<div class="row" data-entry="' + t.id + '"><div class="main"><div class="what">' + what + '</div><div class="meta">' + meta + '</div></div>' +
     '<div class="amt ' + cls + '">' + amt + '</div><button class="x" title="Delete" data-del="' + t.id + '">×</button></div>';
 }
 
@@ -519,7 +534,7 @@ function sheetBtcInterest() {
       $("f-prev").innerHTML = '<div class="preview"><div class="r head"><span>' + r.days + ' days · avg balance</span><span>Share' + (sats ? ' · sats' : '') + (usd ? ' · $' : '') + '</span></div>' +
         activeBuckets().concat(state.buckets.filter(b => b.archived && r.pct[b.id])).filter(b => r.pct[b.id]).map(b =>
           '<div class="r"><span><span class="dot" style="display:inline-block;margin-right:6px;background:' + b.color + '"></span>' + esc(b.name) + ' · ' + fmt(Math.round(r.avg[b.id])) + '</span><span><b>' + r.pct[b.id].toFixed(2) + '%</b>' +
-          (sats ? ' · ' + (r.splits[b.id] || 0).toLocaleString("en-US") : '') + (usd ? ' · ' + fmt(r.usdSplits[b.id] || 0) : '') + '</span></div>').join("") + '</div>' +
+          (sats ? ' · ' + num(r.splits[b.id] || 0) : '') + (usd ? ' · ' + fmt(r.usdSplits[b.id] || 0) : '') + '</span></div>').join("") + '</div>' +
         (first && first > st ? '<div class="warnbox">Your first deposit is dated ' + shortDate(first) + ', after this period starts, so earlier days count as $0. If the money was in Strike before that, delete that deposit and re-add it with the real date.</div>' : "");
     };
     ["f-sats", "f-usd", "f-start", "f-end"].forEach(id => $(id).oninput = upd); upd();
@@ -584,15 +599,15 @@ function sheetBucket(id) {
   const partial = st.withUsd < st.pays.length;
   const tiles = st.pays.length ? [
     tile("Cash", fmt(cash), (total > 0 ? Math.round(cash / total * 1000) / 10 : 0) + "% of Strike cash"),
-    tile("BTC earned", st.sats.toLocaleString("en-US") + " sats", fmtBtc(st.sats), "btc"),
+    tile("BTC earned", fmtSats(st.sats), fmtBtc(st.sats), "btc"),
     tile("Worth now", "…", "Getting price…", "", "t-now"),
     tile("Worth when paid", st.withUsd ? fmt(st.usdAtReceipt) : "—", st.withUsd ? (partial ? st.withUsd + " of " + st.pays.length + " payouts had a $ value" : "Total at each payout") : "Add $ value when logging interest"),
     tile("Gain since paid", st.withUsd ? "…" : "—", st.withUsd ? "Getting price…" : "Needs a $ value at payout", "", "t-gain"),
     tile("Interest rate", st.apy != null ? st.apy.toFixed(2) + "%" : "—", st.apy != null ? "Yearly rate on avg cash" : "Needs a $ value at payout"),
   ].join("") : tile("Cash", fmt(cash), (total > 0 ? Math.round(cash / total * 1000) / 10 : 0) + "% of Strike cash") +
     tile("BTC earned", "0 sats", "No interest payouts yet", "btc");
-  const hist = st.pays.map(t => '<div class="r"><span>' + shortDate(t.start) + ' – ' + shortDate(t.end) + '<br><small style="color:var(--muted)">' + t.pct[id].toFixed(2) + '% share · paid ' + shortDate(t.date) + '</small></span>' +
-    '<span><b style="color:#f7931a">+' + t.splits[id].toLocaleString("en-US") + '</b><br><small style="color:var(--muted)" data-then="' + t.id + '">' +
+  const hist = st.pays.map(t => '<div class="r" data-entry="' + t.id + '" data-from="' + id + '"><span>' + shortDate(t.start) + ' – ' + shortDate(t.end) + '<br><small style="color:var(--muted)">' + t.pct[id].toFixed(2) + '% share · paid ' + shortDate(t.date) + '</small></span>' +
+    '<span><b style="color:#f7931a">+' + num(t.splits[id]) + '</b><br><small style="color:var(--muted)" data-then="' + t.id + '">' +
     (t.usdSplits && t.usdSplits[id] != null ? fmt(t.usdSplits[id]) + " then" : "") + '</small></span></div>').join("");
   open('<h3 style="display:flex;align-items:center;gap:8px"><span class="dot" style="width:12px;height:12px;background:' + b.color + '"></span>' + esc(b.name) + '</h3>' +
     '<p class="hint">' + (st.pays.length ? st.pays.length + " BTC interest payout" + (st.pays.length > 1 ? "s" : "") + " since " + shortDate(st.pays[st.pays.length - 1].date) : "Interest shows here once Strike pays out.") + '</p>' +
@@ -612,13 +627,86 @@ function sheetBucket(id) {
         return;
       }
       const now = satsToCents(st.sats, p.usd);
-      set("t-now", fmt(now), "at " + fmt(Math.round(p.usd * 100)).replace(".00", "") + " / BTC");
+      set("t-now", fmt(now), "at " + fmtRaw(Math.round(p.usd * 100)).replace(".00", "") + " / BTC");
       if (st.withUsd) {
         const nowPart = satsToCents(st.satsWithUsd, p.usd), g = nowPart - st.usdAtReceipt;
         set("t-gain", (g >= 0 ? "+" : "−") + fmt(Math.abs(g)), st.usdAtReceipt ? pctStr(g / st.usdAtReceipt * 100) + (partial ? " · payouts with a $ value" : "") : "", g >= 0 ? "pos" : "neg");
       }
       st.pays.forEach(t => { const el = $("sheet").querySelector('[data-then="' + t.id + '"]'); if (el) el.textContent = (el.textContent ? el.textContent + " · " : "") + fmt(satsToCents(t.splits[id], p.usd)) + " now"; });
       $("t-price").textContent = "Price from " + p.src + ", " + new Date(p.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    });
+  });
+}
+
+/* ---------- one entry in detail ----------
+   `from` = the bucket whose sheet it was opened from: its piece leads, and Back returns there. */
+function sheetEntry(tid, from) {
+  const t = state.txns.find(x => x.id === tid); if (!t) return;
+  const me = from && share(t, from) ? from : null;
+  const tile = (k, v, sub, cls, tidAttr) => '<div class="tile"' + (tidAttr ? ' id="' + tidAttr + '"' : "") + '><div class="k">' + k + '</div><div class="v ' + (cls || "") + '">' + v + '</div><div class="s">' + (sub || "&nbsp;") + '</div></div>';
+  const row = (k, v, mine) => '<div class="r' + (mine ? " me" : "") + '"><span>' + k + '</span><span>' + v + '</span></div>';
+  const dot = id => { const b = state.buckets.find(x => x.id === id); return '<span class="dot" style="display:inline-block;margin-right:6px;background:' + (b ? b.color : "#888") + '"></span>'; };
+  const nm = id => dot(id) + esc(bucketName(id));
+  const priceStr = p => "at " + fmtRaw(Math.round(p.usd * 100)).replace(".00", "") + " / BTC";
+  const gainStr = (now, then) => (now >= then ? "+" : "−") + fmt(Math.abs(now - then)) + " (" + pctStr(then ? (now - then) / then * 100 : 0) + ") since paid";
+  let title, hint, tiles = "", body = "", live = null;
+
+  if (t.type === "btcInterest") {
+    const { avg, days } = avgDaily(t.start, t.end);
+    const ids = Object.keys(t.splits).sort((a, b) => t.splits[b] - t.splits[a]);
+    title = "BTC interest · " + shortDate(t.start) + " – " + shortDate(t.end);
+    hint = days + "-day period · paid " + shortDate(t.date);
+    if (me) {
+      const sats = t.splits[me], then = t.usdSplits && t.usdSplits[me] != null ? t.usdSplits[me] : null;
+      const rate = then != null && avg[me] > 0 ? then / (avg[me] * days) * 365 * 100 : null;
+      tiles = tile("Sats received", fmtSats(sats), fmtBtc(sats), "btc") +
+        tile("Share", t.pct[me].toFixed(2) + "%", "of " + fmtSats(t.sats)) +
+        tile("Avg cash", fmt(Math.round(avg[me] || 0)), "over the " + days + " days") +
+        tile("Rate this period", rate != null ? rate.toFixed(2) + "%" : "—", rate != null ? "Yearly rate on avg cash" : "Needs a $ value at payout") +
+        tile("Worth when paid", then != null ? fmt(then) : "—", then != null ? "On " + shortDate(t.date) : "No $ value logged") +
+        tile("Worth now", "…", "Getting price…", "", "e-now");
+      live = p => { const now = satsToCents(sats, p.usd); return { v: fmt(now), s: then != null ? gainStr(now, then) : priceStr(p), cls: then != null ? (now >= then ? "pos" : "neg") : "" }; };
+    } else {
+      tiles = tile("Sats received", fmtSats(t.sats), fmtBtc(t.sats), "btc") + tile("Buckets", ids.length, "split by avg cash") +
+        tile("Worth when paid", t.usd ? fmt(t.usd) : "—", t.usd ? "On " + shortDate(t.date) : "No $ value logged") + tile("Worth now", "…", "Getting price…", "", "e-now");
+      live = p => { const now = satsToCents(t.sats, p.usd); return { v: fmt(now), s: t.usd ? gainStr(now, t.usd) : priceStr(p), cls: t.usd ? (now >= t.usd ? "pos" : "neg") : "" }; };
+    }
+    body = '<label>How it was split</label><div class="kv">' + ids.map(id =>
+      row(nm(id) + '<br><small>avg cash ' + fmt(Math.round(avg[id] || 0)) + '</small>',
+        '<b>' + t.pct[id].toFixed(2) + '%</b><br><small>' + fmtSats(t.splits[id]) + (t.usdSplits && t.usdSplits[id] != null ? " · " + fmt(t.usdSplits[id]) : "") + '</small>', id === me)).join("") + '</div>' +
+      (t.usd ? "" : '<p class="pricenote">Add the dollar value when you log interest to see gain and rate.</p>');
+    if (t.note) body += '<div class="kv">' + row("Note", esc(t.note)) + '</div>';
+  } else if (t.type === "deposit" || t.type === "withdraw") {
+    const dep = t.type === "deposit", p = partsOf(t), ids = Object.keys(p).sort((a, b) => p[b] - p[a]);
+    title = dep ? "Deposit" : "Withdrawal"; hint = shortDate(t.date) + (t.note ? " · " + esc(t.note) : "");
+    tiles = me ? tile("This bucket", (dep ? "+" : "−") + fmt(p[me]), "", dep ? "pos" : "neg") + tile("Share", (p[me] / t.amount * 100).toFixed(1) + "%", "of " + fmt(t.amount) + " in Strike")
+               : tile("Total in Strike", (dep ? "+" : "−") + fmt(t.amount), "", dep ? "pos" : "neg") + tile("Buckets", ids.length, ids.length > 1 ? "split" : "one bucket");
+    body = '<label>Split</label><div class="kv">' + ids.map(id => row(nm(id), fmt(p[id]) + ' <small>· ' + (p[id] / t.amount * 100).toFixed(1) + '%</small>', id === me)).join("") + '</div>';
+  } else if (t.type === "move") {
+    title = "Move"; hint = shortDate(t.date) + (t.note ? " · " + esc(t.note) : "");
+    tiles = tile("Amount", fmt(t.amount)) + tile("Strike balance", "No change", "money stayed in Strike");
+    body = '<div class="kv">' + row("From", nm(t.from), t.from === me) + row("To", nm(t.to), t.to === me) + '</div>';
+  } else {
+    title = "Interest (cash)"; hint = shortDate(t.date);
+    body = '<div class="kv">' + Object.keys(t.splits).map(id => row(nm(id), fmt(t.splits[id]), id === me)).join("") + '</div>';
+  }
+
+  open('<h3>' + title + '</h3><p class="hint">' + hint + (me ? ' · showing ' + esc(bucketName(me)) : "") + '</p>' +
+    (tiles ? '<div class="tiles">' + tiles + '</div>' : "") + (live ? '<div class="pricenote" id="e-price"></div>' : "") + body +
+    '<div class="btns">' + (from ? '<button class="pill" id="e-back">‹ Back</button>' : "") + '<button class="pill' + (from ? "" : " primary") + '" data-act="close">Close</button></div>', () => {
+    if (from) $("e-back").onclick = () => sheetBucket(from);
+    if (!live) return;
+    btcPrice().then(p => {
+      const el = $("e-now"); if (!el) return; // sheet closed meanwhile
+      const v = el.querySelector(".v"), sub = el.querySelector(".s");
+      if (!p) {
+        v.textContent = "—"; sub.textContent = "Price unavailable";
+        const n = $("e-price"); n.className = "pricenote bad";
+        n.textContent = "Couldn't get the bitcoin price — you're probably offline. Your data is safe. Do this: reconnect, then reopen this entry.";
+        return;
+      }
+      const r = live(p); v.textContent = r.v; v.className = "v " + r.cls; sub.textContent = r.s;
+      $("e-price").textContent = "Price from " + p.src + ", " + new Date(p.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     });
   });
 }
@@ -717,8 +805,6 @@ $("file").onchange = async e => {
 
 /* ---------- wiring ---------- */
 document.addEventListener("click", e => {
-  const bk = e.target.closest("[data-bucket]");
-  if (bk) return sheetBucket(bk.dataset.bucket);
   const del = e.target.closest("[data-del]");
   if (del) {
     const t = state.txns.find(x => x.id === del.dataset.del); if (!t) return;
@@ -732,6 +818,10 @@ document.addEventListener("click", e => {
     state.txns = state.txns.filter(x => x.id !== t.id); save(); render(); toast("Entry deleted");
     return;
   }
+  const en = e.target.closest("[data-entry]");
+  if (en) return sheetEntry(en.dataset.entry, en.dataset.from);
+  const bk = e.target.closest("[data-bucket]");
+  if (bk) return sheetBucket(bk.dataset.bucket);
   const b = e.target.closest("[data-act]"); if (!b || b.disabled) return;
   ({ deposit: () => sheetSplit("deposit"), withdraw: () => sheetSplit("withdraw"), move: sheetMove, interest: sheetBtcInterest, reconcile: sheetReconcile,
      manage: sheetManage, export: exportJson, import: () => $("file").click(), close,
@@ -790,23 +880,22 @@ $("upd-go").onclick = () => {
 $("upd-check").onclick = e => { e.preventDefault(); checkForUpdate(true); };
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(); });
 
-/* Privacy cover. iOS snapshots the app for the app switcher as it leaves the screen; put a plain
-   logo screen up the moment the app loses focus or is hidden, and take it down when it's back. */
-const cover = $("cover");
-const hideAll = () => cover.classList.add("show");
-const unhide = () => { if (document.visibilityState === "visible") cover.classList.remove("show"); };
-document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" ? hideAll() : setTimeout(unhide, 50));
-window.addEventListener("blur", () => { if (!document.querySelector('input[type=file]:focus')) hideAll(); });
-window.addEventListener("pagehide", hideAll);
-window.addEventListener("focus", () => setTimeout(unhide, 50));
-window.addEventListener("pageshow", () => setTimeout(unhide, 50));
-cover.addEventListener("pointerdown", () => cover.classList.remove("show")); // never leave you stuck behind it
 window.addEventListener("pageshow", e => { if (e.persisted) checkForUpdate(); });
 $("ver").textContent = "Version " + APP_VERSION;
 if (location.search) history.replaceState(null, "", BASE); // drop ?v= so the Home Screen URL stays clean
 
 $("flt-type").onchange = e => { filter.type = e.target.value; showAll = false; render(); };
 $("flt-bucket").onchange = e => { filter.bucket = e.target.value; showAll = false; render(); };
+
+const EYE_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_SHUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+function paintEye() { const b = $("eye"); b.innerHTML = hidden ? EYE_SHUT : EYE_OPEN; b.classList.toggle("on", hidden); b.setAttribute("aria-label", hidden ? "Show amounts" : "Hide amounts"); }
+$("eye").onclick = () => {
+  hidden = !hidden; try { localStorage.setItem(HIDE_KEY, hidden ? "1" : "0"); } catch (e) {}
+  if ($("shade").classList.contains("open")) close();
+  paintEye(); render();
+};
+paintEye();
 
 load(); render(); checkForUpdate();
 </script>
