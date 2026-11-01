@@ -56,6 +56,21 @@ h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: upp
 .bucket .bal { font-size: 26px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .bucket .pct { color: var(--muted); font-size: 13px; }
 .bucket .btc { color: #f7931a; font-size: 13px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.bucket[data-bucket] { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.bucket[data-bucket]:hover { border-color: var(--muted); }
+.bucket[data-bucket]:active { background: var(--line); }
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; min-width: 0; }
+.tile .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+.tile .v { font-size: 20px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .v.pos { color: var(--pos); } .tile .v.neg { color: var(--neg); } .tile .v.btc { color: #f7931a; }
+.tile .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.pricenote { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.pricenote.bad { color: var(--neg); }
+/* privacy cover: hides balances in the iPhone app switcher, like Strike's logo screen */
+.cover { position: fixed; inset: 0; z-index: 100; background: #000; display: none; place-items: center; }
+.cover.show { display: grid; }
+.cover .logo { width: 88px; height: 88px; border-radius: 22px; background: #111113; border: 1px solid rgba(255,255,255,.12); display: grid; place-items: center; font-size: 44px; }
 .sub.btc { color: #f7931a; }
 .preview .r.head { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
 .preview .r span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
@@ -70,6 +85,9 @@ h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: upp
   .bucket + .bucket { border-top: 1px solid var(--line); }
   .bucket .bal { margin: 0; font-size: 18px; text-align: right; }
   .bucket .pct { text-align: right; }
+  .bucket { gap: 10px; }
+  .bucket > div:first-child { flex: 1; min-width: 0; }
+  .bucket[data-bucket]::after { content: "›"; color: var(--muted); font-size: 22px; line-height: 1; margin-left: 2px; }
 }
 .empty { background: var(--card); border: 1px dashed var(--line); border-radius: 16px; padding: 28px 16px; text-align: center; color: var(--muted); }
 .list { background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
@@ -172,11 +190,12 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 
 <div class="shade" id="shade"><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
 <div class="toast" id="toast" role="status"></div>
+<div class="cover" id="cover" aria-hidden="true"><div class="logo">🪣</div></div>
 <div class="update" id="update" role="status"><span>A new version is ready.</span><button class="pill primary" id="upd-go">Update now</button></div>
 
 <script>
 "use strict";
-const APP_VERSION = "2026-10-19.6"; // bump on every release — the update check compares this
+const APP_VERSION = "2026-11-01.1"; // bump on every release — the update check compares this
 const KEY = "strike-buckets-v1";
 const COLORS = ["#0a84ff", "#30d158", "#ff9f0a", "#bf5af2", "#ff375f", "#64d2ff", "#ffd60a", "#ac8e68"];
 
@@ -308,7 +327,7 @@ function render() {
     const n = list.length, cols = Math.ceil(n / Math.ceil(n / 4)); // balanced rows: 5→3+2, 7→4+3, never a lone orphan
     box.innerHTML = '<div class="buckets" style="grid-template-columns:repeat(' + cols + ',1fr)">' + list.map(b => {
       const v = bal[b.id] || 0, pct = total > 0 ? Math.round(v / total * 1000) / 10 : 0;
-      return '<div class="bucket"><div><div class="name"><span class="dot" style="background:' + b.color + '"></span>' + esc(b.name) + '</div>' +
+      return '<div class="bucket" data-bucket="' + b.id + '" role="button" tabindex="0" aria-label="' + esc(b.name) + ' details"><div><div class="name"><span class="dot" style="background:' + b.color + '"></span>' + esc(b.name) + '</div>' +
         (earned[b.id] ? '<div class="btc">₿ ' + fmtSats(earned[b.id]) + '</div>' : "") + '</div>' +
         '<div><div class="bal">' + fmt(v) + '</div><div class="pct">' + pct + '% of total</div></div></div>';
     }).join("") + '</div>' +
@@ -518,6 +537,92 @@ function sheetBtcInterest() {
   });
 }
 
+/* ---------- bucket detail ---------- */
+/* Live BTC price, fetched only when a detail sheet opens. mempool.space first, Coinbase as backup.
+   Nothing about you or your balances is sent — just a plain price request. */
+let priceCache = null;
+async function btcPrice() {
+  if (priceCache && Date.now() - priceCache.at < 60000) return priceCache;
+  const sources = [
+    ["mempool.space", "https://mempool.space/api/v1/prices", j => j.USD],
+    ["Coinbase", "https://api.coinbase.com/v2/prices/BTC-USD/spot", j => parseFloat(j.data.amount)],
+  ];
+  for (const [name, url, pick] of sources) {
+    try {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) continue;
+      const usd = pick(await r.json());
+      if (usd > 0) return (priceCache = { usd, src: name, at: Date.now() });
+    } catch (e) { /* try the next source */ }
+  }
+  return null;
+}
+const satsToCents = (sats, usd) => Math.round(sats / 1e8 * usd * 100);
+const pctStr = x => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(1) + "%";
+
+/* Everything the detail sheet shows for one bucket, before the live price is known. */
+function bucketStats(id) {
+  const pays = state.txns.filter(t => t.type === "btcInterest" && t.splits[id])
+    .sort((a, b) => (b.date + b.created).localeCompare(a.date + a.created));
+  let sats = 0, satsWithUsd = 0, usdAtReceipt = 0, yNum = 0, yDen = 0;
+  for (const t of pays) {
+    sats += t.splits[id];
+    if (t.usdSplits && t.usdSplits[id] != null) {
+      satsWithUsd += t.splits[id]; usdAtReceipt += t.usdSplits[id];
+      const { avg, days } = avgDaily(t.start, t.end);           // yield = interest $ ÷ (avg cash × days), annualized
+      if (avg[id] > 0) { yNum += t.usdSplits[id]; yDen += avg[id] * days; }
+    }
+  }
+  return { pays, sats, satsWithUsd, usdAtReceipt, withUsd: pays.filter(t => t.usdSplits && t.usdSplits[id] != null).length,
+    apy: yDen ? yNum / yDen * 365 * 100 : null };
+}
+
+function sheetBucket(id) {
+  const b = state.buckets.find(x => x.id === id); if (!b) return;
+  const bal = balances(), total = totalOf(bal), st = bucketStats(id), cash = bal[id] || 0;
+  const tile = (k, v, sub, cls, tid) => '<div class="tile"' + (tid ? ' id="' + tid + '"' : "") + '><div class="k">' + k + '</div><div class="v ' + (cls || "") + '">' + v + '</div><div class="s">' + (sub || "&nbsp;") + '</div></div>';
+  const partial = st.withUsd < st.pays.length;
+  const tiles = st.pays.length ? [
+    tile("Cash", fmt(cash), (total > 0 ? Math.round(cash / total * 1000) / 10 : 0) + "% of Strike cash"),
+    tile("BTC earned", st.sats.toLocaleString("en-US") + " sats", fmtBtc(st.sats), "btc"),
+    tile("Worth now", "…", "Getting price…", "", "t-now"),
+    tile("Worth when paid", st.withUsd ? fmt(st.usdAtReceipt) : "—", st.withUsd ? (partial ? st.withUsd + " of " + st.pays.length + " payouts had a $ value" : "Total at each payout") : "Add $ value when logging interest"),
+    tile("Gain since paid", st.withUsd ? "…" : "—", st.withUsd ? "Getting price…" : "Needs a $ value at payout", "", "t-gain"),
+    tile("Interest rate", st.apy != null ? st.apy.toFixed(2) + "%" : "—", st.apy != null ? "Yearly rate on avg cash" : "Needs a $ value at payout"),
+  ].join("") : tile("Cash", fmt(cash), (total > 0 ? Math.round(cash / total * 1000) / 10 : 0) + "% of Strike cash") +
+    tile("BTC earned", "0 sats", "No interest payouts yet", "btc");
+  const hist = st.pays.map(t => '<div class="r"><span>' + shortDate(t.start) + ' – ' + shortDate(t.end) + '<br><small style="color:var(--muted)">' + t.pct[id].toFixed(2) + '% share · paid ' + shortDate(t.date) + '</small></span>' +
+    '<span><b style="color:#f7931a">+' + t.splits[id].toLocaleString("en-US") + '</b><br><small style="color:var(--muted)" data-then="' + t.id + '">' +
+    (t.usdSplits && t.usdSplits[id] != null ? fmt(t.usdSplits[id]) + " then" : "") + '</small></span></div>').join("");
+  open('<h3 style="display:flex;align-items:center;gap:8px"><span class="dot" style="width:12px;height:12px;background:' + b.color + '"></span>' + esc(b.name) + '</h3>' +
+    '<p class="hint">' + (st.pays.length ? st.pays.length + " BTC interest payout" + (st.pays.length > 1 ? "s" : "") + " since " + shortDate(st.pays[st.pays.length - 1].date) : "Interest shows here once Strike pays out.") + '</p>' +
+    '<div class="tiles">' + tiles + '</div>' + (st.pays.length ? '<div class="pricenote" id="t-price"></div>' : "") +
+    (hist ? '<label>Payouts (sats)</label><div class="preview">' + hist + '</div>' : "") +
+    '<div class="btns"><button class="pill" data-act="close">Close</button><button class="pill primary" id="f-acts">See activity</button></div>', () => {
+    $("f-acts").onclick = () => { filter.bucket = id; filter.type = ""; showAll = false; close(); render(); $("filters").scrollIntoView({ behavior: "smooth", block: "start" }); };
+    if (!st.pays.length) return;
+    btcPrice().then(p => {
+      if (!$("t-now")) return; // sheet closed meanwhile
+      const set = (tid, v, sub, cls) => { const el = $(tid); if (!el) return; el.querySelector(".v").textContent = v; el.querySelector(".v").className = "v " + (cls || ""); el.querySelector(".s").textContent = sub; };
+      if (!p) {
+        set("t-now", "—", "Price unavailable");
+        if (st.withUsd) set("t-gain", "—", "Price unavailable");
+        const n = $("t-price"); n.className = "pricenote bad";
+        n.textContent = "Couldn't get the bitcoin price — you're probably offline. Your data is safe. Do this: reconnect, then close and reopen this bucket.";
+        return;
+      }
+      const now = satsToCents(st.sats, p.usd);
+      set("t-now", fmt(now), "at " + fmt(Math.round(p.usd * 100)).replace(".00", "") + " / BTC");
+      if (st.withUsd) {
+        const nowPart = satsToCents(st.satsWithUsd, p.usd), g = nowPart - st.usdAtReceipt;
+        set("t-gain", (g >= 0 ? "+" : "−") + fmt(Math.abs(g)), st.usdAtReceipt ? pctStr(g / st.usdAtReceipt * 100) + (partial ? " · payouts with a $ value" : "") : "", g >= 0 ? "pos" : "neg");
+      }
+      st.pays.forEach(t => { const el = $("sheet").querySelector('[data-then="' + t.id + '"]'); if (el) el.textContent = (el.textContent ? el.textContent + " · " : "") + fmt(satsToCents(t.splits[id], p.usd)) + " now"; });
+      $("t-price").textContent = "Price from " + p.src + ", " + new Date(p.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    });
+  });
+}
+
 function sheetReconcile() {
   const total = totalOf(balances());
   open('<h3>Reconcile</h3><p class="hint">Enter the cash balance the Strike app shows right now. Tracked here: <b>' + fmt(total) + '</b></p>' +
@@ -612,6 +717,8 @@ $("file").onchange = async e => {
 
 /* ---------- wiring ---------- */
 document.addEventListener("click", e => {
+  const bk = e.target.closest("[data-bucket]");
+  if (bk) return sheetBucket(bk.dataset.bucket);
   const del = e.target.closest("[data-del]");
   if (del) {
     const t = state.txns.find(x => x.id === del.dataset.del); if (!t) return;
@@ -682,6 +789,18 @@ $("upd-go").onclick = () => {
 };
 $("upd-check").onclick = e => { e.preventDefault(); checkForUpdate(true); };
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(); });
+
+/* Privacy cover. iOS snapshots the app for the app switcher as it leaves the screen; put a plain
+   logo screen up the moment the app loses focus or is hidden, and take it down when it's back. */
+const cover = $("cover");
+const hideAll = () => cover.classList.add("show");
+const unhide = () => { if (document.visibilityState === "visible") cover.classList.remove("show"); };
+document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" ? hideAll() : setTimeout(unhide, 50));
+window.addEventListener("blur", () => { if (!document.querySelector('input[type=file]:focus')) hideAll(); });
+window.addEventListener("pagehide", hideAll);
+window.addEventListener("focus", () => setTimeout(unhide, 50));
+window.addEventListener("pageshow", () => setTimeout(unhide, 50));
+cover.addEventListener("pointerdown", () => cover.classList.remove("show")); // never leave you stuck behind it
 window.addEventListener("pageshow", e => { if (e.persisted) checkForUpdate(); });
 $("ver").textContent = "Version " + APP_VERSION;
 if (location.search) history.replaceState(null, "", BASE); // drop ?v= so the Home Screen URL stays clean
