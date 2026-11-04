@@ -204,7 +204,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 
 <script>
 "use strict";
-const APP_VERSION = "2026-11-01.3"; // bump on every release — the update check compares this
+const APP_VERSION = "2026-11-04.1"; // bump on every release — the update check compares this
 const KEY = "strike-buckets-v1";
 const COLORS = ["#0a84ff", "#30d158", "#ff9f0a", "#bf5af2", "#ff375f", "#64d2ff", "#ffd60a", "#ac8e68"];
 
@@ -245,7 +245,7 @@ function parseMoney(str) {
   return Math.round(parseFloat(s) * 100);
 }
 /* Hide amounts: every balance, amount and sats figure renders as ••••. Always hidden when the app
-   opens or comes back; tap the eye (or shake the phone) to reveal. */
+   opens or comes back; tap the eye to reveal. */
 let hidden = true;
 try { localStorage.removeItem("strike-buckets-hide"); } catch (e) {} // old "remember my choice" setting, no longer used
 const MASK = "••••";
@@ -899,31 +899,11 @@ function setHidden(h) {
   hidden = h; paintEye(); render();
   if (rebuildSheet) rebuildSheet(); // forms stay open as-is so nothing typed is lost
 }
-$("eye").onclick = () => { askMotion(); setHidden(!hidden); };
+$("eye").onclick = () => setHidden(!hidden);
 // Leaving the app (home, app switcher, lock) hides amounts again for next time.
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") setHidden(true); });
 window.addEventListener("pagehide", () => setHidden(true));
 
-/* Shake to reveal (shake again to hide). iPhone asks once for motion access; that prompt can only
-   come from a tap, so it's asked the first time you tap the eye. */
-let shakeAt = 0, peaks = [];
-function onMotion(e) {
-  const a = e.acceleration && e.acceleration.x != null ? e.acceleration : null;
-  const g = a ? null : e.accelerationIncludingGravity;
-  if (!a && !g) return;
-  const m = a ? Math.hypot(a.x, a.y, a.z) : Math.abs(Math.hypot(g.x, g.y, g.z) - 9.81);
-  const now = Date.now();
-  if (m < 14) return;                                       // a firm shake, not a bump or a walk
-  peaks = peaks.filter(t => now - t < 700); peaks.push(now);
-  if (peaks.length >= 3 && now - shakeAt > 1200) { shakeAt = now; peaks = []; setHidden(!hidden); }
-}
-window.addEventListener("devicemotion", onMotion);
-let motionAsked = false;
-function askMotion() {
-  if (motionAsked || typeof DeviceMotionEvent === "undefined" || typeof DeviceMotionEvent.requestPermission !== "function") return;
-  motionAsked = true;
-  DeviceMotionEvent.requestPermission().catch(() => {}); // once granted, the devicemotion listener above starts getting events
-}
 paintEye();
 
 load(); render(); checkForUpdate();
